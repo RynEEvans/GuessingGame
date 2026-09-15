@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="icon" href="data:," />
+  <title>Clue Chasers</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <main>
+    <header class="title">
+      <h1>Clue Chasers</h1>
+      <p>One player picks a secret, the others ask yes/no questions to guess it.</p>
+    </header>
+
+    <section id="joinView">
+      <input id="nameInput" type="text" maxlength="20" placeholder="Your name" autocomplete="off" />
+      <input id="codeInput" type="text" maxlength="4" placeholder="Room code (to join)" autocomplete="off" />
+      <div class="row">
+        <button id="createBtn" class="primary">Create room</button>
+        <button id="joinBtn">Join room</button>
+      </div>
+      <p id="status" class="muted">connecting…</p>
+    </section>
+
+    <section id="roomView" hidden>
+      <div class="roombar">
+        <div>
+          <strong class="codeLabel">Room</strong>
+          <button id="codeBtn" class="chip" title="Copy code"></button>
+        </div>
+        <div class="players" id="playerList"></div>
+      </div>
+
+      <div id="banner" class="banner" hidden></div>
+      <div id="prompt" class="prompt" hidden></div>
+
+      <div id="controls" hidden></div>
+
+      <ol id="log" class="log"></ol>
+    </section>
+  </main>
+
+  <script src="game.js"></script>
+</body>
+</html>
