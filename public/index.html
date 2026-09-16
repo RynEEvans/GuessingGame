@@ -17,6 +17,13 @@
     <section id="joinView">
       <input id="nameInput" type="text" maxlength="20" placeholder="Your name" autocomplete="off" />
       <input id="codeInput" type="text" maxlength="4" placeholder="Room code (to join)" autocomplete="off" />
+      <div class="setting">
+        <label for="chatSelect">Chat mode for the room you create</label>
+        <select id="chatSelect">
+          <option value="text">Text chat</option>
+          <option value="voice">Voice chat</option>
+        </select>
+      </div>
       <div class="row">
         <button id="createBtn" class="primary">Create room</button>
         <button id="joinBtn">Join room</button>
@@ -29,11 +36,13 @@
         <div>
           <strong class="codeLabel">Room</strong>
           <button id="codeBtn" class="chip" title="Copy code"></button>
+          <span id="chatChip" class="tag" hidden></span>
         </div>
         <div class="players" id="playerList"></div>
       </div>
 
       <div id="banner" class="banner" hidden></div>
+      <div id="notice" class="notice" hidden></div>
       <div id="prompt" class="prompt" hidden></div>
 
       <div id="controls" hidden></div>

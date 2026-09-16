@@ -18,6 +18,23 @@ const MIME = {
   '.ico': 'image/x-icon',
 };
 
+let CATEGORIES = {};
+try {
+  CATEGORIES = JSON.parse(await readFile(path.join(__dirname, 'categories.json'), 'utf8'));
+} catch (err) {
+  console.error('Could not load categories.json:', err.message);
+}
+
+function pickCategory(prev) {
+  const names = Object.keys(CATEGORIES);
+  if (names.length === 0) return null;
+  if (prev && names.length > 1) {
+    const others = names.filter((n) => n !== prev);
+    return others[Math.floor(Math.random() * others.length)];
+  }
+  return names[Math.floor(Math.random() * names.length)];
+}
+
 const rooms = new Map();
 
 function randomCode() {
@@ -71,6 +88,72 @@ function onlineInOrder(room) {
   return room.players.filter(isOnline);
 }
 
+function targetOf(room, giverId) {
+  const order = onlineInOrder(room);
+  const idx = order.findIndex((p) => p.id === giverId);
+  if (idx === -1) return null;
+  return order[(idx + 1) % order.length];
+}
+
+function reviewVoters(room, review) {
+  return onlineInOrder(room).filter((p) => p.id !== review.giverId && p.id !== review.targetId);
+}
+
+function reviewBatchDone(room) {
+  return room.reviews.length > 0 && room.reviews.every((r) => {
+    const voters = reviewVoters(room, r);
+    return voters.every((v) => v.id in r.votes);
+  });
+}
+
+function reviewBatchResolve(room) {
+  const online = onlineInOrder(room);
+  let rejected = 0;
+  for (const r of room.reviews) {
+    const votes = Object.values(r.votes);
+    const yes = votes.filter(Boolean).length;
+    const no = votes.length - yes;
+    const target = room.players.find((p) => p.id === r.targetId);
+    if (votes.length === 0 || yes > no) {
+      room.submittedSecrets[r.giverId] = r.word;
+      delete room.pendingSecrets[r.giverId];
+      pushLog(room, { type: 'system', text: `The room approved "${r.word}" for ${target?.name}.` });
+    } else {
+      rejected += 1;
+      delete room.pendingSecrets[r.giverId];
+      pushLog(room, { type: 'system', text: `The room rejected "${r.word}" for ${target?.name} (${yes} yes · ${no} no). They'll pick another.` });
+    }
+  }
+  room.reviews = [];
+  if (rejected === 0 && Object.keys(room.submittedSecrets).length >= online.length) {
+    distributeCards(room);
+    return;
+  }
+  room.phase = 'assigning';
+  pushLog(room, {
+    type: 'system',
+    text: rejected > 0
+      ? 'Some words were rejected — those players hand in another word.'
+      : 'All words approved — sizing up the table…',
+  });
+}
+
+function openReviewPhase(room) {
+  room.reviews = Object.keys(room.pendingSecrets).map((giverId) => {
+    const target = targetOf(room, giverId);
+    return {
+      id: `${giverId}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      giverId,
+      targetId: target?.id,
+      word: room.pendingSecrets[giverId],
+      votes: {},
+    };
+  });
+  room.phase = 'review';
+  pushLog(room, { type: 'system', text: 'Everyone handed in a word — the room reviews them for fairness.' });
+  if (reviewBatchDone(room)) reviewBatchResolve(room);
+}
+
 function publicState(room, forId) {
   const revealAll = room.phase === 'reveal' || room.phase === 'over';
   const order = onlineInOrder(room);
@@ -99,6 +182,9 @@ function publicState(room, forId) {
   const state = {
     type: 'state',
     code: room.code,
+    chat: room.chat,
+    category: room.category,
+    categoryWords: room.category ? (CATEGORIES[room.category] || []) : [],
     phase: room.phase,
     round: room.round,
     log: room.log,
@@ -108,6 +194,25 @@ function publicState(room, forId) {
     awaitingAnswer: !!room.poll,
     poll,
     submittedCount: room.players.filter(isOnline).filter((p) => p.id in room.submittedSecrets).length,
+    pendingCount: room.players.filter(isOnline).filter((p) => p.id in room.pendingSecrets).length,
+    mySubmitted: forId in room.submittedSecrets,
+    myPending: forId in room.pendingSecrets,
+    reviews: room.reviews.map((r) => {
+      const voters = onlineInOrder(room).filter((p) => p.id !== r.giverId && p.id !== r.targetId);
+      const iAmTarget = r.targetId === forId;
+      return {
+        id: r.id,
+        giverId: r.giverId,
+        targetId: r.targetId,
+        word: iAmTarget ? null : r.word,
+        votersOut: voters.length,
+        voted: voters.filter((v) => v.id in r.votes).length,
+        myVote: forId in r.votes ? r.votes[forId] : null,
+        iAmGiver: r.giverId === forId,
+        iAmTarget,
+        canVote: !iAmTarget && r.giverId !== forId,
+      };
+    }),
     players: room.players.map((p) => {
       const s = room.secrets[p.id];
       const visible = s && (revealAll || p.id !== forId);
@@ -122,7 +227,6 @@ function publicState(room, forId) {
       };
     }),
     myHasCard: !!room.secrets[forId],
-    mySubmitted: forId in room.submittedSecrets,
     myTargetId: deal[forId] ?? null,
   };
 
@@ -145,8 +249,10 @@ function pushLog(room, entry) {
   room.log.push(entry);
 }
 
-function allResolved(room) {
-  return onlineInOrder(room).every((p) => room.secrets[p.id]?.resolved);
+function solveAward(room) {
+  const n = onlineInOrder(room).length;
+  const done = onlineInOrder(room).filter((p) => room.secrets[p.id]?.resolved).length;
+  return Math.max(0, n - 1 - done);
 }
 
 function advanceTurn(room) {
@@ -170,12 +276,13 @@ function advanceTurn(room) {
 
 function resolvePlayer(room, receiver) {
   const secret = room.secrets[receiver.id];
+  const award = solveAward(room);
   secret.resolved = true;
-  receiver.score += 1;
+  receiver.score += award;
   const giver = room.players.find((p) => p.id === secret.giverId);
   pushLog(room, {
     type: 'win',
-    text: `${receiver.name} guessed it! Their word "${secret.word}" (given by ${giver.name}) is solved.`,
+    text: `${receiver.name} guessed "${secret.word}" (given by ${giver.name}) — worth ${award} point${award === 1 ? '' : 's'}.`,
   });
 }
 
@@ -184,7 +291,7 @@ function endRound(room) {
     const giver = room.players.find((g) => g.id === room.secrets[p.id].giverId);
     pushLog(room, {
       type: 'sys',
-      text: `${p.name}${room.secrets[p.id].resolved ? ' solved' : ' missed'} "${room.secrets[p.id].word}" (given by ${giver.name}).`,
+      text: `${p.name}${room.secrets[p.id].resolved ? ' solved' : ' revealed (last one left)'} "${room.secrets[p.id].word}" (given by ${giver.name}).`,
     });
   }
   const winner = onlineInOrder(room).find((p) => p.score >= SCORE_TO_WIN);
@@ -208,15 +315,24 @@ function closePoll(room) {
 }
 
 function startAssignmentRound(room, msg) {
+  const prevCategory = room.category;
   room.round += 1;
+  room.category = pickCategory(prevCategory);
   room.submittedSecrets = {};
+  room.pendingSecrets = {};
   room.secrets = {};
+  room.reviews = [];
   room.poll = null;
   room.log = [];
   room.winnerId = null;
   room.turnId = null;
   room.phase = 'assigning';
-  pushLog(room, { type: 'system', text: msg || `Round ${room.round}: give a word to another player.` });
+  pushLog(room, {
+    type: 'system',
+    text: msg || (room.category
+      ? `Round ${room.round} — category: ${room.category}. Give a word from it to another player.`
+      : `Round ${room.round}: give a word to another player.`),
+  });
 }
 
 function distributeCards(room) {
@@ -229,6 +345,8 @@ function distributeCards(room) {
     room.secrets[receiver.id] = { word: room.submittedSecrets[giver.id], giverId: giver.id, resolved: false };
   }
   room.submittedSecrets = {};
+  room.pendingSecrets = {};
+  room.reviews = [];
   room.phase = 'questioning';
   room.poll = null;
   room.turnId = order[0].id;
@@ -272,6 +390,7 @@ wss.on('connection', (ws) => {
         const player = { id: crypto.randomUUID(), name, score: 0, ws };
         const room = {
           code: randomCode(),
+          chat: msg.chat === 'voice' ? 'voice' : 'text',
           players: [player],
           phase: 'lobby',
           round: 0,
@@ -279,8 +398,11 @@ wss.on('connection', (ws) => {
           winnerId: null,
           turnId: null,
           poll: null,
+          category: null,
           submittedSecrets: {},
+          pendingSecrets: {},
           secrets: {},
+          reviews: [],
         };
         rooms.set(room.code, room);
         sendTo(ws, { type: 'joined', id: player.id });
@@ -309,7 +431,7 @@ wss.on('connection', (ws) => {
         if (room.phase !== 'lobby') return sendTo(ws, { type: 'error', message: 'Game already started.' });
         const online = onlineInOrder(room);
         if (online.length < 2) return sendTo(ws, { type: 'error', message: 'Need at least 2 players.' });
-        startAssignmentRound(room, 'Round 1: give a word to another player.');
+        startAssignmentRound(room);
         broadcast(room);
         break;
       }
@@ -320,15 +442,34 @@ wss.on('connection', (ws) => {
         const player = playerOf(room, ws);
         if (!player) return;
         if (room.phase !== 'assigning') return sendTo(ws, { type: 'error', message: 'Not choosing secrets right now.' });
-        if (player.id in room.submittedSecrets) return sendTo(ws, { type: 'error', message: 'Already picked. Waiting for others.' });
+        if (player.id in room.pendingSecrets || player.id in room.submittedSecrets) {
+          return sendTo(ws, { type: 'error', message: 'Already handed in. Waiting for everyone else.' });
+        }
         const secret = String(msg.secret || '').trim().slice(0, 60);
         if (!secret) return sendTo(ws, { type: 'error', message: 'Enter a secret.' });
-        room.submittedSecrets[player.id] = secret;
-        pushLog(room, { type: 'system', text: `${player.name} handed out a word.` });
+        const target = targetOf(room, player.id);
+        if (!target) return sendTo(ws, { type: 'error', message: 'No target to give a word to.' });
+        room.pendingSecrets[player.id] = secret;
+        pushLog(room, { type: 'system', text: `${player.name} handed in a word for ${target.name}.` });
         const online = onlineInOrder(room);
-        if (Object.keys(room.submittedSecrets).length >= online.length) {
-          distributeCards(room);
-        }
+        const covered = online.filter((p) => (p.id in room.pendingSecrets) || (p.id in room.submittedSecrets));
+        if (covered.length >= online.length) openReviewPhase(room);
+        broadcast(room);
+        break;
+      }
+
+      case 'review-vote': {
+        const room = findRoom(ws);
+        if (!room) return;
+        const player = playerOf(room, ws);
+        if (!player) return;
+        if (room.phase !== 'review') return sendTo(ws, { type: 'error', message: 'No words are being reviewed.' });
+        const review = room.reviews.find((r) => r.id === msg.id);
+        if (!review) return sendTo(ws, { type: 'error', message: 'That review is already closed.' });
+        if (player.id === review.giverId || player.id === review.targetId) return sendTo(ws, { type: 'error', message: 'You can\u0027t review that word.' });
+        if (player.id in review.votes) return sendTo(ws, { type: 'error', message: 'You already voted on that word.' });
+        review.votes[player.id] = !!msg.yes;
+        if (reviewBatchDone(room)) reviewBatchResolve(room);
         broadcast(room);
         break;
       }
@@ -344,17 +485,36 @@ wss.on('connection', (ws) => {
         if (my.resolved) return sendTo(ws, { type: 'error', message: 'Your card is already solved.' });
         if (room.poll) return sendTo(ws, { type: 'error', message: 'Wait for the current poll to close.' });
         if (player.id !== room.turnId) return sendTo(ws, { type: 'error', message: 'Not your turn.' });
-        const text = String(msg.text || '').trim().slice(0, 120);
+        const text = room.chat === 'voice' ? '(over voice chat)' : String(msg.text || '').trim().slice(0, 120);
         if (!text) return sendTo(ws, { type: 'error', message: 'Enter a question.' });
-        if (isSolve(text, my.word)) {
-          resolvePlayer(room, player);
-          advanceTurn(room);
-          if (allResolved(room)) endRound(room);
-          broadcast(room);
-          return;
-        }
         pushLog(room, { type: 'q', who: player.id, text });
         room.poll = { askerId: player.id, question: text, votes: {} };
+        broadcast(room);
+        break;
+      }
+
+      case 'guess': {
+        const room = findRoom(ws);
+        if (!room) return;
+        const player = playerOf(room, ws);
+        if (!player) return;
+        if (room.phase !== 'questioning') return sendTo(ws, { type: 'error', message: 'Not taking guesses.' });
+        const my = room.secrets[player.id];
+        if (!my) return sendTo(ws, { type: 'error', message: 'You have no card.' });
+        if (my.resolved) return sendTo(ws, { type: 'error', message: 'Your card is already solved.' });
+        if (room.poll) return sendTo(ws, { type: 'error', message: 'Wait for the current poll to close.' });
+        if (player.id !== room.turnId) return sendTo(ws, { type: 'error', message: 'Not your turn.' });
+        const guess = String(msg.guess || '').trim().slice(0, 120);
+        if (!guess) return sendTo(ws, { type: 'error', message: 'Enter a guess.' });
+        if (isSolve(guess, my.word)) {
+          resolvePlayer(room, player);
+          const left = onlineInOrder(room).filter((p) => !room.secrets[p.id]?.resolved).length;
+          if (left <= 1) endRound(room);
+          else advanceTurn(room);
+        } else {
+          pushLog(room, { type: 'guess', who: player.id, text: guess });
+          advanceTurn(room);
+        }
         broadcast(room);
         break;
       }
@@ -383,12 +543,21 @@ wss.on('connection', (ws) => {
         break;
       }
 
+      case 'set-chat': {
+        const room = findRoom(ws);
+        if (!room) return;
+        if (room.phase !== 'lobby') return sendTo(ws, { type: 'error', message: 'Only changeable before the game starts.' });
+        room.chat = msg.chat === 'voice' ? 'voice' : 'text';
+        broadcast(room);
+        break;
+      }
+
       case 'restart': {
         const room = findRoom(ws);
         if (!room) return;
         if (room.phase !== 'over') return;
         for (const p of room.players) p.score = 0;
-        startAssignmentRound(room, 'Fresh match! Round 1: pick your secrets.');
+        startAssignmentRound(room);
         broadcast(room);
         break;
       }
@@ -410,11 +579,13 @@ wss.on('connection', (ws) => {
     const online = onlineInOrder(room);
     pushLog(room, { type: 'system', text: `${player.name} left.` });
 
-    if (room.phase === 'assigning' || room.phase === 'questioning') {
+    if (room.phase === 'assigning' || room.phase === 'review' || room.phase === 'questioning') {
       if (online.length < 2) {
         room.phase = 'lobby';
         room.submittedSecrets = {};
+        room.pendingSecrets = {};
         room.secrets = {};
+        room.reviews = [];
         room.poll = null;
         room.log = [];
         pushLog(room, { type: 'system', text: 'Not enough players. Waiting for more.' });
