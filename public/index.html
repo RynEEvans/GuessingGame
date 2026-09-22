@@ -10,7 +10,7 @@
 <body>
   <main>
     <header class="title">
-      <h1><span id="logoG" title="">G</span>uessing Game <span class="ver">1.1</span></h1>
+      <h1><span id="logoG" title="">G</span>uessing Game <span class="ver">1.1.1</span></h1>
       <p>One player picks a secret, the others ask yes/no questions to guess it.</p>
     </header>
 
@@ -25,6 +25,7 @@
       <input id="devRoom" type="text" readonly />
       <label class="devlabel" for="devState">Last state</label>
       <pre id="devState" class="devstate"></pre>
+      <div id="devView" class="devview" hidden></div>
       <label class="devlabel" for="devSend">Send raw message (JSON)</label>
       <div class="askForm">
         <input id="devSend" type="text" placeholder='{"type":"question","text":"…"}' autocomplete="off" spellcheck="false" />
@@ -42,6 +43,14 @@
           <option value="text">Text chat</option>
           <option value="voice">Voice chat</option>
         </select>
+      </div>
+      <div class="setting" id="themesBox" hidden>
+        <label>Themes for the room you create</label>
+        <div class="themerow">
+          <button type="button" id="themeAll">All</button>
+          <button type="button" id="themeNone">None</button>
+        </div>
+        <div id="themeList" class="themeList"></div>
       </div>
       <div class="row">
         <button id="createBtn" class="primary">Create room</button>

@@ -289,3 +289,20 @@ button.guess { background: var(--accent2); color: #06351f; font-weight: 700; }
   word-break: break-all;
 }
 #devState.fresh { outline: 1px solid var(--warn); }
+
+.devview {
+  margin-top: 8px;
+  padding: 10px 12px;
+  background: #0c141b;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+}
+.devview .secret {
+  margin: 4px 0 0;
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  color: var(--accent2);
+  text-transform: uppercase;
+  overflow-wrap: anywhere;
+}

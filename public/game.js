@@ -24,6 +24,7 @@
   const devSend = $('#devSend');
   const devSendBtn = $('#devSendBtn');
   const devError = $('#devError');
+  const devView = $('#devView');
 
   let ws = null;
   let myId = null;
@@ -43,6 +44,7 @@
       if (msg.type === 'joined') myId = msg.id;
       else if (msg.type === 'state') render(msg);
       else if (msg.type === 'error') showError(msg.message);
+      else if (msg.type === 'eye') showDevEye(msg);
       devState.textContent = ev.data;
       devState.classList.remove('fresh');
       void devState.offsetWidth;
@@ -57,6 +59,14 @@
     } else {
       setStatus(text, true);
     }
+  }
+
+  function showDevEye(msg) {
+    devView.hidden = false;
+    devView.innerHTML = msg.word
+      ? `<div class="muted">Your card in <b>${escapeHtml(msg.phase)}</b>:</div>
+         <p class="secret">${escapeHtml(msg.word)}</p>`
+      : `<div class="muted">No card yet (${escapeHtml(msg.phase || 'unknown')}).</div>`;
   }
 
   function send(obj) { ws.send(JSON.stringify(obj)); }
@@ -135,8 +145,12 @@
     }
 
     if (s.phase === 'questioning' && me?.resolved) {
+      const mine = s.players.find((p) => p.id === myId);
+      const giver = s.players.find((p) => p.id === mine?.giverId);
       prompt.hidden = false;
-      prompt.innerHTML = `<div>Card solved! ✓ You can still vote on other people's polls.</div>`;
+      prompt.innerHTML = `Card solved! ✓ The word was<p class="secret">${escapeHtml(mine?.card || '?')}</p>
+        <div class="muted">given by ${escapeHtml(giver?.name || '…')}</div>
+        <div class="muted" style="margin-top:4px">You can still vote on other people's polls.</div>`;
       return;
     }
 
@@ -182,7 +196,7 @@
         let shuffleRow = '';
         if (s.submittedCount + s.pendingCount === 0) {
           shuffleRow = `<div class="row" style="margin-bottom:10px">
-            <button type="button" id="shuffleBtn">Shuffle who gives to whom</button>
+            <button type="button" id="shuffleBtn">Shuffle the theme</button>
           </div>`;
         }
         html = `
@@ -404,6 +418,16 @@
     devError.textContent = '';
     const raw = devSend.value.trim();
     if (!raw) return;
+    if (raw.startsWith('/')) {
+      const cmd = raw.split(/\s+/)[0].toLowerCase();
+      if (cmd === '/eye_open') {
+        send({ type: 'dev-eye' });
+        devSend.value = '';
+      } else {
+        devError.textContent = `Unknown command: ${cmd}`;
+      }
+      return;
+    }
     try {
       send(JSON.parse(raw));
       devSend.value = '';

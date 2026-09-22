@@ -25,8 +25,10 @@ try {
   console.error('Could not load categories.json:', err.message);
 }
 
-function pickCategory(prev) {
-  const names = Object.keys(CATEGORIES);
+function pickCategory(prev, allowed = null) {
+  let names = allowed && allowed.length ? allowed : Object.keys(CATEGORIES);
+  names = names.filter((n) => CATEGORIES[n]);
+  if (names.length === 0) names = Object.keys(CATEGORIES);
   if (names.length === 0) return null;
   if (prev && names.length > 1) {
     const others = names.filter((n) => n !== prev);
@@ -230,7 +232,8 @@ function publicState(room, forId) {
     }),
     players: room.players.map((p) => {
       const s = room.secrets[p.id];
-      const visible = s && (revealAll || p.id !== forId);
+      const revealMine = p.id === forId && s?.resolved;
+      const visible = s && (revealAll || p.id !== forId || revealMine);
       return {
         id: p.id,
         name: p.name,
@@ -332,7 +335,7 @@ function closePoll(room) {
 function startAssignmentRound(room, msg) {
   const prevCategory = room.category;
   room.round += 1;
-  room.category = pickCategory(prevCategory);
+  room.category = pickCategory(prevCategory, room.enabledCategories);
   room.submittedSecrets = {};
   room.pendingSecrets = {};
   room.secrets = {};
@@ -391,6 +394,8 @@ const httpServer = http.createServer(async (req, res) => {
 const wss = new WebSocketServer({ server: httpServer });
 
 wss.on('connection', (ws) => {
+  sendTo(ws, { type: 'meta', categories: Object.keys(CATEGORIES) });
+
   ws.on('message', (raw) => {
     let msg;
     try {
@@ -414,6 +419,7 @@ wss.on('connection', (ws) => {
           winnerId: null,
           turnId: null,
           seatOrder: null,
+          enabledCategories: Array.isArray(msg.categories) ? msg.categories.filter((c) => typeof c === 'string') : null,
           poll: null,
           category: null,
           submittedSecrets: {},
@@ -560,6 +566,20 @@ wss.on('connection', (ws) => {
         break;
       }
 
+      case 'dev-eye': {
+        const room = findRoom(ws);
+        const player = room ? playerOf(room, ws) : null;
+        if (!player) return sendTo(ws, { type: 'error', message: 'Join a room first.' });
+        const secret = room.secrets[player.id];
+        sendTo(ws, {
+          type: 'eye',
+          word: secret ? secret.word : null,
+          giverId: secret ? secret.giverId : null,
+          phase: room.phase,
+        });
+        break;
+      }
+
       case 'shuffle': {
         const room = findRoom(ws);
         if (!room) return;
@@ -567,10 +587,12 @@ wss.on('connection', (ws) => {
         if (!player) return;
         if (room.phase !== 'assigning') return sendTo(ws, { type: 'error', message: 'Only shuffle at the start of a round.' });
         if (Object.keys(room.pendingSecrets).length > 0 || Object.keys(room.submittedSecrets).length > 0) {
-          return sendTo(ws, { type: 'error', message: 'Wait until everyone hands in a word before shuffling.' });
+          return sendTo(ws, { type: 'error', message: 'Wait until everyone picks a word before shuffling the theme.' });
         }
-        room.seatOrder = shuffle(onlineInOrder(room));
-        pushLog(room, { type: 'system', text: `${player.name} shuffled the table order.` });
+        const next = pickCategory(room.category, room.enabledCategories);
+        if (!next) return sendTo(ws, { type: 'error', message: 'No categories loaded.' });
+        room.category = next;
+        pushLog(room, { type: 'system', text: `${player.name} shuffled the theme to: ${room.category}.` });
         broadcast(room);
         break;
       }
