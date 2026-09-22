@@ -88,8 +88,23 @@ function onlineInOrder(room) {
   return room.players.filter(isOnline);
 }
 
+function shuffle(arr) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
+function roundOrder(room) {
+  if (!room.seatOrder) return onlineInOrder(room);
+  const seen = new Set(room.seatOrder.map((p) => p.id));
+  const extra = room.players.filter((p) => isOnline(p) && !seen.has(p.id));
+  return [...room.seatOrder, ...extra].filter(isOnline);
+}
+
 function targetOf(room, giverId) {
-  const order = onlineInOrder(room);
+  const order = roundOrder(room);
   const idx = order.findIndex((p) => p.id === giverId);
   if (idx === -1) return null;
   return order[(idx + 1) % order.length];
@@ -117,11 +132,11 @@ function reviewBatchResolve(room) {
     if (votes.length === 0 || yes > no) {
       room.submittedSecrets[r.giverId] = r.word;
       delete room.pendingSecrets[r.giverId];
-      pushLog(room, { type: 'system', text: `The room approved "${r.word}" for ${target?.name}.` });
+      pushLog(room, { type: 'system', text: `The room approved a word for ${target?.name}.` });
     } else {
       rejected += 1;
       delete room.pendingSecrets[r.giverId];
-      pushLog(room, { type: 'system', text: `The room rejected "${r.word}" for ${target?.name} (${yes} yes · ${no} no). They'll pick another.` });
+      pushLog(room, { type: 'system', text: `The room rejected ${target?.name}'s word (${yes} yes · ${no} no). They'll pick another.` });
     }
   }
   room.reviews = [];
@@ -156,7 +171,7 @@ function openReviewPhase(room) {
 
 function publicState(room, forId) {
   const revealAll = room.phase === 'reveal' || room.phase === 'over';
-  const order = onlineInOrder(room);
+  const order = roundOrder(room);
   const deal = {};
   const n = order.length;
   for (let i = 0; i < n; i++) {
@@ -326,6 +341,7 @@ function startAssignmentRound(room, msg) {
   room.log = [];
   room.winnerId = null;
   room.turnId = null;
+  room.seatOrder = shuffle(onlineInOrder(room));
   room.phase = 'assigning';
   pushLog(room, {
     type: 'system',
@@ -336,7 +352,7 @@ function startAssignmentRound(room, msg) {
 }
 
 function distributeCards(room) {
-  const order = onlineInOrder(room);
+  const order = roundOrder(room);
   const n = order.length;
   room.secrets = {};
   for (let i = 0; i < n; i++) {
@@ -397,6 +413,7 @@ wss.on('connection', (ws) => {
           log: [],
           winnerId: null,
           turnId: null,
+          seatOrder: null,
           poll: null,
           category: null,
           submittedSecrets: {},
@@ -539,6 +556,21 @@ wss.on('connection', (ws) => {
         if (!room) return;
         if (room.phase !== 'reveal') return;
         startAssignmentRound(room);
+        broadcast(room);
+        break;
+      }
+
+      case 'shuffle': {
+        const room = findRoom(ws);
+        if (!room) return;
+        const player = playerOf(room, ws);
+        if (!player) return;
+        if (room.phase !== 'assigning') return sendTo(ws, { type: 'error', message: 'Only shuffle at the start of a round.' });
+        if (Object.keys(room.pendingSecrets).length > 0 || Object.keys(room.submittedSecrets).length > 0) {
+          return sendTo(ws, { type: 'error', message: 'Wait until everyone hands in a word before shuffling.' });
+        }
+        room.seatOrder = shuffle(onlineInOrder(room));
+        pushLog(room, { type: 'system', text: `${player.name} shuffled the table order.` });
         broadcast(room);
         break;
       }

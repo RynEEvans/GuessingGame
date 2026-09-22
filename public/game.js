@@ -17,22 +17,36 @@
   const chatChip = $('#chatChip');
   const notice = $('#notice');
 
+  const devConsole = $('#devConsole');
+  const devStatus = $('#devStatus');
+  const devRoom = $('#devRoom');
+  const devState = $('#devState');
+  const devSend = $('#devSend');
+  const devSendBtn = $('#devSendBtn');
+  const devError = $('#devError');
+
   let ws = null;
   let myId = null;
+  let logoClicks = 0;
 
   function connect() {
     ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}`);
     ws.onopen = () => {
       status.textContent = 'Connected. Create a room or join with a code.';
       createBtn.disabled = joinBtn.disabled = false;
+      devStatus.value = 'open';
     };
-    ws.onclose = () => setStatus('Disconnected. Refresh to reconnect.', true);
-    ws.onerror = () => setStatus('Connection error.', true);
+    ws.onclose = () => { setStatus('Disconnected. Refresh to reconnect.', true); devStatus.value = 'closed'; };
+    ws.onerror = () => { setStatus('Connection error.', true); devStatus.value = 'error'; };
     ws.onmessage = (ev) => {
       const msg = JSON.parse(ev.data);
       if (msg.type === 'joined') myId = msg.id;
       else if (msg.type === 'state') render(msg);
       else if (msg.type === 'error') showError(msg.message);
+      devState.textContent = ev.data;
+      devState.classList.remove('fresh');
+      void devState.offsetWidth;
+      devState.classList.add('fresh');
     };
   }
 
@@ -65,6 +79,7 @@
     }
 
     codeBtn.textContent = s.code;
+    devRoom.value = `${s.code} · ${s.phase} · round ${s.round}`;
     chatChip.textContent = s.chat === 'voice' ? 'Voice' : 'Text';
     chatChip.hidden = false;
     renderPlayers(s);
@@ -164,7 +179,14 @@
         html = `<div class="muted">${s.submittedCount + s.pendingCount} of ${total} handed in a word… the room reviews them all together.</div>`;
       } else {
         const target = s.players.find((p) => p.id === s.myTargetId);
+        let shuffleRow = '';
+        if (s.submittedCount + s.pendingCount === 0) {
+          shuffleRow = `<div class="row" style="margin-bottom:10px">
+            <button type="button" id="shuffleBtn">Shuffle who gives to whom</button>
+          </div>`;
+        }
         html = `
+          ${shuffleRow}
           <form class="secretForm">
             <input id="secretInput" type="text" maxlength="24" placeholder="A word for ${escapeHtml(target?.name || 'them')}…" autocomplete="off" />
             <div class="row">
@@ -175,6 +197,8 @@
       }
       controls.innerHTML = html;
       const form = controls.querySelector('form.secretForm');
+      const shuffleBtn = controls.querySelector('#shuffleBtn');
+      if (shuffleBtn) shuffleBtn.onclick = () => send({ type: 'shuffle' });
       if (form) {
         const input = $('#secretInput');
         $('#giveBtn').onclick = () => {
@@ -365,6 +389,30 @@
   codeBtn.onclick = () => {
     if (navigator.clipboard) navigator.clipboard.writeText(codeBtn.textContent);
   };
+
+  $('#logoG').onclick = () => {
+    logoClicks += 1;
+    if (logoClicks >= 13) {
+      logoClicks = 0;
+      devConsole.hidden = !devConsole.hidden;
+    }
+  };
+
+  $('#devClose').onclick = () => { devConsole.hidden = true; };
+
+  function devSendRaw() {
+    devError.textContent = '';
+    const raw = devSend.value.trim();
+    if (!raw) return;
+    try {
+      send(JSON.parse(raw));
+      devSend.value = '';
+    } catch {
+      devError.textContent = 'Not valid JSON.';
+    }
+  }
+  devSendBtn.onclick = devSendRaw;
+  devSend.onkeydown = (e) => { if (e.key === 'Enter') devSendRaw(); };
 
   connect();
 })();

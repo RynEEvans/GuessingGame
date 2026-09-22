@@ -10,9 +10,28 @@
 <body>
   <main>
     <header class="title">
-      <h1>Guessing Game</h1>
+      <h1><span id="logoG" title="">G</span>uessing Game</h1>
       <p>One player picks a secret, the others ask yes/no questions to guess it.</p>
     </header>
+
+    <section id="devConsole" hidden>
+      <div class="devhead">
+        <span>DEV CONSOLE</span>
+        <button id="devClose">✕</button>
+      </div>
+      <label class="devlabel" for="devStatus">Connection</label>
+      <input id="devStatus" type="text" readonly />
+      <label class="devlabel" for="devRoom">Room</label>
+      <input id="devRoom" type="text" readonly />
+      <label class="devlabel" for="devState">Last state</label>
+      <pre id="devState" class="devstate"></pre>
+      <label class="devlabel" for="devSend">Send raw message (JSON)</label>
+      <div class="askForm">
+        <input id="devSend" type="text" placeholder='{"type":"question","text":"…"}' autocomplete="off" spellcheck="false" />
+        <button id="devSendBtn" class="primary">Send</button>
+      </div>
+      <div class="muted" id="devError" style="margin-top:6px"></div>
+    </section>
 
     <section id="joinView">
       <input id="nameInput" type="text" maxlength="20" placeholder="Your name" autocomplete="off" />
