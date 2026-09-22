@@ -148,6 +148,18 @@ button.guess { background: var(--accent2); color: #06351f; font-weight: 700; }
   text-transform: uppercase;
 }
 .player .cardchip.mine { background: #572b33; color: #ffb8c0; }
+.player .crown { font-size: 12px; margin-right: 3px; }
+.player .spectag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: #2b313d;
+  color: var(--muted);
+  font-size: 10px;
+  font-style: normal;
+  letter-spacing: 0.5px;
+}
 
 .pollq { color: var(--muted); font-size: 13px; }
 .polltext { font-size: 16px; font-style: italic; margin-top: 4px; line-height: 1.4; }

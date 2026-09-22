@@ -109,7 +109,9 @@
       if (p.card) card = `<span class="cardchip">${escapeHtml(p.card)}</span>`;
       else if (p.id === myId && p.online && s.phase === 'questioning') card = `<span class="cardchip mine">?</span>`;
       const tick = p.resolved ? ' ✓' : '';
-      return `<span class="${classes.join(' ')}">${escapeHtml(p.name)}${tick}${card}<span class="score">${p.score}</span></span>`;
+      const specTag = p.spec ? ' <span class="spectag">watching</span>' : '';
+      const crown = p.id === s.hostId ? ' <span class="crown" title="Host">👑</span>' : '';
+      return `<span class="${classes.join(' ')}">${crown}${escapeHtml(p.name)}${tick}${specTag}${card}<span class="score">${p.score}</span></span>`;
     }).join('');
   }
 
@@ -133,7 +135,7 @@
   function renderPrompt(s, me) {
     prompt.hidden = true;
 
-    if (s.phase === 'assigning' && me) {
+    if (s.phase === 'assigning' && me && !me.spec) {
       const target = s.players.find((p) => p.id === s.myTargetId);
       const giver = s.players.find((p) => p.myTargetId === me.id);
       prompt.hidden = false;
@@ -167,7 +169,14 @@
     controls.innerHTML = '';
     controls.hidden = false;
 
+    if (me?.spec) {
+      controls.innerHTML = `<div class="muted">Watching — you'll play from the next round.</div>`;
+      return;
+    }
+
     if (s.phase === 'lobby') {
+      const isHost = me && me.id === s.hostId;
+      const allReady = s.readyNeeded >= 2 && s.readyCount === s.readyNeeded;
       controls.innerHTML = `
         <div class="setting">
           <label for="chatModeSelect">Chat mode</label>
@@ -176,12 +185,20 @@
             <option value="voice">Voice chat</option>
           </select>
         </div>
-        <button id="startBtn" class="primary">Start game</button>`;
+        <div class="row" style="margin-bottom:8px">
+          <button id="readyBtn" class="${s.myReady ? 'good' : 'primary'}">${s.myReady ? 'Ready ✓' : 'Ready'}</button>
+          ${isHost ? `<button id="startBtn" class="primary" ${allReady ? '' : 'disabled'}>Start game (${s.readyCount}/${s.readyNeeded} ready)</button>` : ''}
+        </div>
+        ${isHost
+          ? `<div class="muted">${allReady ? 'Everyone ready — start the round when you are.' : 'Waiting for everyone to ready up.'}</div>`
+          : `<div class="muted">${s.readyCount} of ${s.readyNeeded} ready — waiting for the host to start.</div>`}`;
       $('#chatModeSelect').value = s.chat;
       $('#chatModeSelect').onchange = (e) => send({ type: 'set-chat', chat: e.target.value });
-      const btn = $('#startBtn');
-      btn.disabled = s.players.filter((p) => p.online).length < 2;
-      btn.onclick = () => send({ type: 'start' });
+      const rbtn = $('#readyBtn');
+      rbtn.disabled = s.readyNeeded < 2;
+      rbtn.onclick = () => send({ type: 'ready' });
+      const sbtn = $('#startBtn');
+      if (sbtn) sbtn.onclick = () => send({ type: 'start' });
       return;
     }
 

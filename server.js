@@ -87,7 +87,7 @@ function playerOf(room, ws) {
 }
 
 function onlineInOrder(room) {
-  return room.players.filter(isOnline);
+  return room.players.filter((p) => isOnline(p) && !p.spec);
 }
 
 function shuffle(arr) {
@@ -215,12 +215,16 @@ function publicState(room, forId) {
     round: room.round,
     log: room.log,
     winnerId: room.winnerId,
+    hostId: room.hostId,
     scoresToWin: SCORE_TO_WIN,
     turnId: room.turnId,
     awaitingAnswer: !!room.poll,
     poll,
-    submittedCount: room.players.filter(isOnline).filter((p) => p.id in room.submittedSecrets).length,
-    pendingCount: room.players.filter(isOnline).filter((p) => p.id in room.pendingSecrets).length,
+    submittedCount: onlineInOrder(room).filter((p) => p.id in room.submittedSecrets).length,
+    pendingCount: onlineInOrder(room).filter((p) => p.id in room.pendingSecrets).length,
+    readyCount: room.phase === 'lobby' ? onlineInOrder(room).filter((p) => p.id in room.ready).length : 0,
+    readyNeeded: room.phase === 'lobby' ? onlineInOrder(room).length : 0,
+    myReady: room.phase === 'lobby' && (forId in room.ready),
     mySubmitted: forId in room.submittedSecrets,
     myPending: forId in room.pendingSecrets,
     reviews: room.reviews.map((r) => {
@@ -248,6 +252,7 @@ function publicState(room, forId) {
         name: p.name,
         score: p.score,
         online: isOnline(p),
+        spec: !!p.spec,
         card: s ? (visible ? s.word : null) : null,
         giverId: s ? s.giverId : null,
         resolved: s ? s.resolved : false,
@@ -343,6 +348,7 @@ function closePoll(room) {
 
 function startAssignmentRound(room, msg) {
   const prevCategory = room.category;
+  for (const p of room.players) p.spec = false;
   room.round += 1;
   room.category = pickCategory(prevCategory, room.enabledCategories);
   room.submittedSecrets = {};
@@ -437,6 +443,8 @@ wss.on('connection', (ws) => {
           turnId: null,
           seatOrder: null,
           prevCycle: null,
+          ready: {},
+          hostId: player.id,
           enabledCategories: Array.isArray(msg.categories) ? msg.categories.filter((c) => typeof c === 'string') : null,
           poll: null,
           category: null,
@@ -457,11 +465,27 @@ wss.on('connection', (ws) => {
         const room = rooms.get(code);
         if (!name) return sendTo(ws, { type: 'error', message: 'Enter a name.' });
         if (!room) return sendTo(ws, { type: 'error', message: 'No room with that code.' });
-        if (room.players.length >= 4) return sendTo(ws, { type: 'error', message: 'Room is full (max 4 players).' });
-        const player = { id: crypto.randomUUID(), name, score: 0, ws };
+        const asPlayer = room.phase === 'lobby';
+        if (asPlayer && room.players.filter((p) => !p.spec).length >= 4) {
+          return sendTo(ws, { type: 'error', message: 'Room is full (max 4 players).' });
+        }
+        const player = { id: crypto.randomUUID(), name, score: 0, ws, spec: !asPlayer };
         room.players.push(player);
-        pushLog(room, { type: 'system', text: `${name} joined.` });
+        pushLog(room, { type: 'system', text: asPlayer ? `${name} joined.` : `${name} joined — watching and in next round.` });
         sendTo(ws, { type: 'joined', id: player.id });
+        broadcast(room);
+        break;
+      }
+
+      case 'ready': {
+        const room = findRoom(ws);
+        if (!room) return;
+        const player = playerOf(room, ws);
+        if (!player) return;
+        if (room.phase !== 'lobby') return sendTo(ws, { type: 'error', message: 'Game already started.' });
+        if (player.spec) return sendTo(ws, { type: 'error', message: 'Spectators can\u0027t ready up.' });
+        if (player.id in room.ready) delete room.ready[player.id];
+        else room.ready[player.id] = true;
         broadcast(room);
         break;
       }
@@ -469,9 +493,13 @@ wss.on('connection', (ws) => {
       case 'start': {
         const room = findRoom(ws);
         if (!room) return;
+        const player = playerOf(room, ws);
+        if (!player) return;
         if (room.phase !== 'lobby') return sendTo(ws, { type: 'error', message: 'Game already started.' });
+        if (player.id !== room.hostId) return sendTo(ws, { type: 'error', message: 'Only the room host can start.' });
         const online = onlineInOrder(room);
         if (online.length < 2) return sendTo(ws, { type: 'error', message: 'Need at least 2 players.' });
+        if (!online.every((p) => p.id in room.ready)) return sendTo(ws, { type: 'error', message: 'Wait until everyone is ready.' });
         startAssignmentRound(room);
         broadcast(room);
         break;
@@ -482,6 +510,7 @@ wss.on('connection', (ws) => {
         if (!room) return;
         const player = playerOf(room, ws);
         if (!player) return;
+        if (player.spec) return sendTo(ws, { type: 'error', message: 'Spectators join in the next round.' });
         if (room.phase !== 'assigning') return sendTo(ws, { type: 'error', message: 'Not choosing secrets right now.' });
         if (player.id in room.pendingSecrets || player.id in room.submittedSecrets) {
           return sendTo(ws, { type: 'error', message: 'Already handed in. Waiting for everyone else.' });
@@ -505,6 +534,7 @@ wss.on('connection', (ws) => {
         const player = playerOf(room, ws);
         if (!player) return;
         if (room.phase !== 'review') return sendTo(ws, { type: 'error', message: 'No words are being reviewed.' });
+        if (player.spec) return sendTo(ws, { type: 'error', message: 'Spectators join in the next round.' });
         const review = room.reviews.find((r) => r.id === msg.id);
         if (!review) return sendTo(ws, { type: 'error', message: 'That review is already closed.' });
         if (player.id === review.giverId || player.id === review.targetId) return sendTo(ws, { type: 'error', message: 'You can\u0027t review that word.' });
@@ -521,6 +551,7 @@ wss.on('connection', (ws) => {
         const player = playerOf(room, ws);
         if (!player) return;
         if (room.phase !== 'questioning') return sendTo(ws, { type: 'error', message: 'Not taking questions.' });
+        if (player.spec) return sendTo(ws, { type: 'error', message: 'Spectators join in the next round.' });
         const my = room.secrets[player.id];
         if (!my) return sendTo(ws, { type: 'error', message: 'You have no card.' });
         if (my.resolved) return sendTo(ws, { type: 'error', message: 'Your card is already solved.' });
@@ -540,6 +571,7 @@ wss.on('connection', (ws) => {
         const player = playerOf(room, ws);
         if (!player) return;
         if (room.phase !== 'questioning') return sendTo(ws, { type: 'error', message: 'Not taking guesses.' });
+        if (player.spec) return sendTo(ws, { type: 'error', message: 'Spectators join in the next round.' });
         const my = room.secrets[player.id];
         if (!my) return sendTo(ws, { type: 'error', message: 'You have no card.' });
         if (my.resolved) return sendTo(ws, { type: 'error', message: 'Your card is already solved.' });
@@ -566,6 +598,7 @@ wss.on('connection', (ws) => {
         const player = playerOf(room, ws);
         if (!player) return;
         if (room.phase !== 'questioning' || !room.poll) return sendTo(ws, { type: 'error', message: 'No poll is open.' });
+        if (player.spec) return sendTo(ws, { type: 'error', message: 'Spectators join in the next round.' });
         if (player.id === room.poll.askerId) return sendTo(ws, { type: 'error', message: 'You are the one asking.' });
         if (player.id in room.poll.votes) return sendTo(ws, { type: 'error', message: 'You already voted.' });
         room.poll.votes[player.id] = !!msg.yes;
@@ -656,10 +689,12 @@ wss.on('connection', (ws) => {
     if (!player) return;
 
     room.players = room.players.filter((p) => p !== player);
+    delete room.ready[player.id];
     if (room.players.length === 0) {
       rooms.delete(room.code);
       return;
     }
+    if (player.id === room.hostId) room.hostId = room.players[0].id;
 
     const online = onlineInOrder(room);
     pushLog(room, { type: 'system', text: `${player.name} left.` });
@@ -672,6 +707,7 @@ wss.on('connection', (ws) => {
         room.secrets = {};
         room.reviews = [];
         room.poll = null;
+        room.ready = {};
         room.log = [];
         pushLog(room, { type: 'system', text: 'Not enough players. Waiting for more.' });
       } else {
@@ -679,6 +715,7 @@ wss.on('connection', (ws) => {
       }
     } else if (online.length < 2 && room.phase !== 'lobby') {
       room.phase = 'lobby';
+      room.ready = {};
       room.log = [];
       pushLog(room, { type: 'system', text: 'Not enough players. Waiting for more.' });
     }
