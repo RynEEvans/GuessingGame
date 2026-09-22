@@ -98,6 +98,15 @@ function shuffle(arr) {
   return arr;
 }
 
+function cycleKey(order) {
+  const n = order.length;
+  const pairs = [];
+  for (let i = 0; i < n; i++) {
+    pairs.push(`${order[i].id}>${order[(i + 1) % n].id}`);
+  }
+  return pairs.sort().join(',');
+}
+
 function roundOrder(room) {
   if (!room.seatOrder) return onlineInOrder(room);
   const seen = new Set(room.seatOrder.map((p) => p.id));
@@ -344,7 +353,15 @@ function startAssignmentRound(room, msg) {
   room.log = [];
   room.winnerId = null;
   room.turnId = null;
-  room.seatOrder = shuffle(onlineInOrder(room));
+  const online = onlineInOrder(room);
+  let order = shuffle([...online]);
+  if (room.prevCycle && online.length > 2) {
+    for (let t = 0; t < 30 && cycleKey(order) === room.prevCycle; t++) {
+      order = shuffle([...online]);
+    }
+  }
+  room.seatOrder = order;
+  room.prevCycle = cycleKey(order);
   room.phase = 'assigning';
   pushLog(room, {
     type: 'system',
@@ -419,6 +436,7 @@ wss.on('connection', (ws) => {
           winnerId: null,
           turnId: null,
           seatOrder: null,
+          prevCycle: null,
           enabledCategories: Array.isArray(msg.categories) ? msg.categories.filter((c) => typeof c === 'string') : null,
           poll: null,
           category: null,
@@ -562,6 +580,19 @@ wss.on('connection', (ws) => {
         if (!room) return;
         if (room.phase !== 'reveal') return;
         startAssignmentRound(room);
+        broadcast(room);
+        break;
+      }
+
+      case 'dev-shuffle': {
+        const room = findRoom(ws);
+        if (!room) return;
+        if (room.phase !== 'assigning') return sendTo(ws, { type: 'error', message: 'Only shuffle at the start of a round.' });
+        if (Object.keys(room.pendingSecrets).length > 0 || Object.keys(room.submittedSecrets).length > 0) {
+          return sendTo(ws, { type: 'error', message: 'Wait until everyone picks a word before shuffling.' });
+        }
+        room.seatOrder = shuffle(onlineInOrder(room));
+        pushLog(room, { type: 'system', text: 'Dev: shuffled the table order.' });
         broadcast(room);
         break;
       }

@@ -423,6 +423,9 @@
       if (cmd === '/eye_open') {
         send({ type: 'dev-eye' });
         devSend.value = '';
+      } else if (cmd === '/shuffle_players') {
+        send({ type: 'dev-shuffle' });
+        devSend.value = '';
       } else {
         devError.textContent = `Unknown command: ${cmd}`;
       }
