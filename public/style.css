@@ -29,6 +29,17 @@ main {
 }
 
 .title h1 { margin: 8px 0 4px; font-size: 28px; }
+.title .ver {
+  display: inline-block;
+  vertical-align: middle;
+  margin-left: 8px;
+  padding: 2px 8px;
+  font-size: 12px;
+  font-weight: 700;
+  border-radius: 999px;
+  background: #13385c;
+  color: #bfe0ff;
+}
 .title p { margin: 0 0 20px; color: var(--muted); font-size: 14px; }
 
 input, button { font: inherit; }
