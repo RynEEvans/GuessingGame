@@ -223,6 +223,42 @@ button.guess { background: var(--accent2); color: #06351f; font-weight: 700; }
 }
 .secretForm .scrambled { color: var(--muted); font-size: 13px; margin-top: 4px; }
 
+.setrow { margin-top: 8px; }
+#settingsBtn { width: 100%; background: var(--panel); border: 1px solid #2b3648; }
+#settingsPanel {
+  margin-top: 10px;
+  padding: 12px 14px;
+  background: #121926;
+  border: var(--border);
+  border-radius: var(--radius);
+}
+.catlist { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+.catrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--panel2);
+  border: var(--border);
+  border-radius: 8px;
+  font-size: 14px;
+  cursor: pointer;
+}
+.catrow input { width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; }
+.catrow input:disabled { cursor: not-allowed; }
+.catrow span { flex: 1; }
+.catrow .catdel {
+  padding: 2px 8px;
+  font-size: 12px;
+  background: transparent;
+  color: var(--danger);
+  border: 1px solid var(--danger);
+  border-radius: 6px;
+}
+.catadd { display: flex; gap: 8px; }
+.catadd input { margin-bottom: 0; }
+.catadd button { white-space: nowrap; }
+
 .askForm { display: flex; gap: 8px; }
 .askForm input { margin-bottom: 0; }
 .askForm button { flex: 0 0 auto; white-space: nowrap; }

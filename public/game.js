@@ -26,6 +26,13 @@
   const devError = $('#devError');
   const devView = $('#devView');
 
+  setInterval(() => {
+    const btn = document.querySelector('#skipPollBtn');
+    if (!btn || btn.disabled === false) return;
+    const openedAt = Number(btn.dataset.openedAt || 0);
+    if (openedAt && Date.now() - openedAt >= 10000) btn.disabled = false;
+  }, 250);
+
   let ws = null;
   let myId = null;
   let logoClicks = 0;
@@ -166,6 +173,7 @@
   }
 
   function renderControls(s, me) {
+    const prevSecret = controls.querySelector('#secretInput')?.value || '';
     controls.innerHTML = '';
     controls.hidden = false;
 
@@ -177,6 +185,15 @@
     if (s.phase === 'lobby') {
       const isHost = me && me.id === s.hostId;
       const allReady = s.readyNeeded >= 2 && s.readyCount === s.readyNeeded;
+      const cats = s.categories || { all: [], custom: [], enabled: [] };
+      const knownCats = [...cats.all, ...cats.custom];
+      const enabledSet = new Set(cats.enabled);
+      const catRows = knownCats.map((c) => `
+        <label class="catrow">
+          <input type="checkbox" data-cat="${escapeHtml(c)}" ${enabledSet.has(c) ? 'checked' : ''} ${isHost ? '' : 'disabled'} />
+          <span>${escapeHtml(c)}</span>
+          ${cats.custom.includes(c) && isHost ? `<button type="button" class="catdel" data-del="${escapeHtml(c)}" title="Remove">✕</button>` : ''}
+        </label>`).join('');
       controls.innerHTML = `
         <div class="setting">
           <label for="chatModeSelect">Chat mode</label>
@@ -190,8 +207,18 @@
           ${isHost ? `<button id="startBtn" class="primary" ${allReady ? '' : 'disabled'}>Start game (${s.readyCount}/${s.readyNeeded} ready)</button>` : ''}
         </div>
         ${isHost
-          ? `<div class="muted">${allReady ? 'Everyone ready — start the round when you are.' : 'Waiting for everyone to ready up.'}</div>`
-          : `<div class="muted">${s.readyCount} of ${s.readyNeeded} ready — waiting for the host to start.</div>`}`;
+          ? `<div class="muted" style="margin-bottom:8px">${allReady ? 'Everyone ready — start the round when you are.' : 'Waiting for everyone to ready up.'}</div>`
+          : `<div class="muted" style="margin-bottom:8px">${s.readyCount} of ${s.readyNeeded} ready — waiting for the host to start.</div>`}
+        <div class="setrow"><button id="settingsBtn">⚙ Settings</button></div>
+        <div id="settingsPanel" hidden>
+          ${isHost ? '' : '<div class="muted" style="margin-bottom:6px">Only the host can change these.</div>'}
+          <label class="devlabel" for="catList">Categories</label>
+          ${catRows ? `<div id="catList" class="catlist">${catRows}</div>` : '<div class="muted">No categories loaded.</div>'}
+          <div class="catadd">
+            <input id="catInput" type="text" maxlength="30" placeholder="Add your own category…" ${isHost ? '' : 'disabled'} />
+            <button id="catAddBtn" class="primary" ${isHost ? '' : 'disabled'}>Add</button>
+          </div>
+        </div>`;
       $('#chatModeSelect').value = s.chat;
       $('#chatModeSelect').onchange = (e) => send({ type: 'set-chat', chat: e.target.value });
       const rbtn = $('#readyBtn');
@@ -199,6 +226,23 @@
       rbtn.onclick = () => send({ type: 'ready' });
       const sbtn = $('#startBtn');
       if (sbtn) sbtn.onclick = () => send({ type: 'start' });
+      $('#settingsBtn').onclick = () => { const p = $('#settingsPanel'); p.hidden = !p.hidden; };
+      for (const cb of document.querySelectorAll('[data-cat]')) {
+        cb.onchange = () => {
+          const checked = [...document.querySelectorAll('[data-cat]:checked')].map((c) => c.dataset.cat);
+          send({ type: 'set-filter', categories: checked });
+        };
+      }
+      for (const del of document.querySelectorAll('[data-del]')) {
+        del.onclick = () => send({ type: 'remove-category', name: del.dataset.del });
+      }
+      const catInput = $('#catInput');
+      const catAddBtn = $('#catAddBtn');
+      if (catAddBtn && !catAddBtn.disabled) {
+        const add = () => { const v = catInput.value.trim(); if (v) { send({ type: 'add-category', name: v }); catInput.value = ''; } };
+        catAddBtn.onclick = add;
+        catInput.onkeydown = (e) => { if (e.key === 'Enter') add(); };
+      }
       return;
     }
 
@@ -227,11 +271,12 @@
           </form>`;
       }
       controls.innerHTML = html;
-      const form = controls.querySelector('form.secretForm');
       const shuffleBtn = controls.querySelector('#shuffleBtn');
       if (shuffleBtn) shuffleBtn.onclick = () => send({ type: 'shuffle' });
+      const form = controls.querySelector('form.secretForm');
       if (form) {
         const input = $('#secretInput');
+        if (prevSecret) input.value = prevSecret;
         $('#giveBtn').onclick = () => {
           input.value = words[Math.floor(Math.random() * words.length)];
           input.focus();
@@ -291,7 +336,9 @@
         const poll = s.poll;
         const askerName = s.players.find((p) => p.id === poll.askerId)?.name || '?';
         if (poll.askerId === myId) {
-          controls.innerHTML = `<div class="muted">Waiting for votes on your question… (${poll.voters}/${poll.needed})</div>`;
+          controls.innerHTML = `<div class="muted">Waiting for votes on your question… (${poll.voters}/${poll.needed})</div>
+            <button id="skipPollBtn" class="primary" style="margin-top:10px" data-opened-at="${poll.openedAt || 0}" disabled>Skip (10s)</button>`;
+          $('#skipPollBtn').onclick = () => send({ type: 'skip' });
         } else if (poll.myVote !== null) {
           controls.innerHTML = `<div class="muted">${escapeHtml(askerName)} asks: “${escapeHtml(poll.question)}” — you voted. Waiting (${poll.voters}/${poll.needed})…</div>`;
         } else {

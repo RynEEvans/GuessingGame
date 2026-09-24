@@ -25,10 +25,11 @@ try {
   console.error('Could not load categories.json:', err.message);
 }
 
-function pickCategory(prev, allowed = null) {
-  let names = allowed && allowed.length ? allowed : Object.keys(CATEGORIES);
-  names = names.filter((n) => CATEGORIES[n]);
-  if (names.length === 0) names = Object.keys(CATEGORIES);
+function pickCategory(prev, room = null) {
+  const known = { ...CATEGORIES, ...(room?.customCategories || {}) };
+  let names = room && room.enabledCategories && room.enabledCategories.length ? room.enabledCategories : Object.keys(known);
+  names = names.filter((n) => known[n]);
+  if (names.length === 0) names = Object.keys(known);
   if (names.length === 0) return null;
   if (prev && names.length > 1) {
     const others = names.filter((n) => n !== prev);
@@ -198,6 +199,7 @@ function publicState(room, forId) {
       voters: votes.length,
       needed: onlineInOrder(room).filter((p) => p.id !== room.poll.askerId).length,
       myVote: room.poll.askerId === forId ? null : (forId in room.poll.votes ? room.poll.votes[forId] : null),
+      openedAt: room.poll.openedAt,
     };
     if (forId !== room.poll.askerId) {
       poll.yesCount = yes;
@@ -210,7 +212,12 @@ function publicState(room, forId) {
     code: room.code,
     chat: room.chat,
     category: room.category,
-    categoryWords: room.category ? (CATEGORIES[room.category] || []) : [],
+    categoryWords: room.category ? (CATEGORIES[room.category] || room.customCategories[room.category] || []) : [],
+    categories: {
+      all: Object.keys(CATEGORIES),
+      custom: Object.keys(room.customCategories || {}),
+      enabled: room.enabledCategories || Object.keys({ ...CATEGORIES, ...(room.customCategories || {}) }),
+    },
     phase: room.phase,
     round: room.round,
     log: room.log,
@@ -350,7 +357,7 @@ function startAssignmentRound(room, msg) {
   const prevCategory = room.category;
   for (const p of room.players) p.spec = false;
   room.round += 1;
-  room.category = pickCategory(prevCategory, room.enabledCategories);
+  room.category = pickCategory(prevCategory, room);
   room.submittedSecrets = {};
   room.pendingSecrets = {};
   room.secrets = {};
@@ -445,6 +452,7 @@ wss.on('connection', (ws) => {
           prevCycle: null,
           ready: {},
           hostId: player.id,
+          customCategories: {},
           enabledCategories: Array.isArray(msg.categories) ? msg.categories.filter((c) => typeof c === 'string') : null,
           poll: null,
           category: null,
@@ -560,7 +568,7 @@ wss.on('connection', (ws) => {
         const text = room.chat === 'voice' ? '(over voice chat)' : String(msg.text || '').trim().slice(0, 120);
         if (!text) return sendTo(ws, { type: 'error', message: 'Enter a question.' });
         pushLog(room, { type: 'q', who: player.id, text });
-        room.poll = { askerId: player.id, question: text, votes: {} };
+        room.poll = { askerId: player.id, question: text, votes: {}, openedAt: Date.now() };
         broadcast(room);
         break;
       }
@@ -588,6 +596,24 @@ wss.on('connection', (ws) => {
           pushLog(room, { type: 'guess', who: player.id, text: guess });
           advanceTurn(room);
         }
+        broadcast(room);
+        break;
+      }
+
+      case 'skip': {
+        const room = findRoom(ws);
+        if (!room) return;
+        const player = playerOf(room, ws);
+        if (!player) return;
+        if (room.phase !== 'questioning' || !room.poll) return sendTo(ws, { type: 'error', message: 'No poll is open.' });
+        if (player.spec) return sendTo(ws, { type: 'error', message: 'Spectators join in the next round.' });
+        if (player.id !== room.poll.askerId) return sendTo(ws, { type: 'error', message: 'Only the asker can skip their poll.' });
+        if (Date.now() - room.poll.openedAt < 10000) {
+          return sendTo(ws, { type: 'error', message: 'The poll needs 10 seconds before it can be skipped.' });
+        }
+        room.poll = null;
+        pushLog(room, { type: 'system', text: `${player.name} skipped their question.` });
+        advanceTurn(room);
         broadcast(room);
         break;
       }
@@ -653,10 +679,62 @@ wss.on('connection', (ws) => {
         if (Object.keys(room.pendingSecrets).length > 0 || Object.keys(room.submittedSecrets).length > 0) {
           return sendTo(ws, { type: 'error', message: 'Wait until everyone picks a word before shuffling the theme.' });
         }
-        const next = pickCategory(room.category, room.enabledCategories);
+        const next = pickCategory(room.category, room);
         if (!next) return sendTo(ws, { type: 'error', message: 'No categories loaded.' });
         room.category = next;
         pushLog(room, { type: 'system', text: `${player.name} shuffled the theme to: ${room.category}.` });
+        broadcast(room);
+        break;
+      }
+
+      case 'set-filter': {
+        const room = findRoom(ws);
+        if (!room) return;
+        const player = playerOf(room, ws);
+        if (!player) return;
+        if (room.phase !== 'lobby') return sendTo(ws, { type: 'error', message: 'Settings only before the game starts.' });
+        if (player.id !== room.hostId) return sendTo(ws, { type: 'error', message: 'Only the host can change settings.' });
+        const known = { ...CATEGORIES, ...room.customCategories };
+        const wanted = Array.isArray(msg.categories)
+          ? msg.categories.filter((c) => typeof c === 'string' && known[c])
+          : [];
+        room.enabledCategories = wanted.length ? [...new Set(wanted)] : null;
+        broadcast(room);
+        break;
+      }
+
+      case 'add-category': {
+        const room = findRoom(ws);
+        if (!room) return;
+        const player = playerOf(room, ws);
+        if (!player) return;
+        if (room.phase !== 'lobby') return sendTo(ws, { type: 'error', message: 'Settings only before the game starts.' });
+        if (player.id !== room.hostId) return sendTo(ws, { type: 'error', message: 'Only the host can change settings.' });
+        const name = String(msg.name || '').trim().slice(0, 30);
+        if (!name) return sendTo(ws, { type: 'error', message: 'Enter a category name.' });
+        if (name in CATEGORIES || name in room.customCategories) {
+          return sendTo(ws, { type: 'error', message: 'That category already exists.' });
+        }
+        room.customCategories[name] = [];
+        if (room.enabledCategories) room.enabledCategories.push(name);
+        pushLog(room, { type: 'system', text: `${player.name} added a category: ${name}.` });
+        broadcast(room);
+        break;
+      }
+
+      case 'remove-category': {
+        const room = findRoom(ws);
+        if (!room) return;
+        const player = playerOf(room, ws);
+        if (!player) return;
+        if (room.phase !== 'lobby') return sendTo(ws, { type: 'error', message: 'Settings only before the game starts.' });
+        if (player.id !== room.hostId) return sendTo(ws, { type: 'error', message: 'Only the host can change settings.' });
+        const name = String(msg.name || '').trim();
+        if (!(name in room.customCategories)) {
+          return sendTo(ws, { type: 'error', message: name in CATEGORIES ? 'Built-in categories can\u0027t be removed.' : 'No such custom category.' });
+        }
+        delete room.customCategories[name];
+        if (room.enabledCategories) room.enabledCategories = room.enabledCategories.filter((n) => n !== name);
         broadcast(room);
         break;
       }
