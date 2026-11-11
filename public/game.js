@@ -10,6 +10,11 @@
   const joinBtn = $('#joinBtn');
   const codeBtn = $('#codeBtn');
   const playerList = $('#playerList');
+  const roundChip = $('#roundChip');
+  const spectatorVisibilityControl = $('#spectatorVisibilityControl');
+  const showSpectatorCards = $('#showSpectatorCards');
+  const notesInput = $('#notesInput');
+  const notesStatus = $('#notesStatus');
   const banner = $('#banner');
   const prompt = $('#prompt');
   const controls = $('#controls');
@@ -23,6 +28,7 @@
   const devState = $('#devState');
   const devSend = $('#devSend');
   const devSendBtn = $('#devSendBtn');
+  const devSuggestions = $('#devSuggestions');
   const devError = $('#devError');
   const devView = $('#devView');
 
@@ -36,21 +42,116 @@
   let ws = null;
   let myId = null;
   let logoClicks = 0;
+  let notesRoomCode = null;
+  let resumeToken = null;
+  let autoRejoinPending = false;
+  const playerSessionKey = 'guessing-game-player';
+
+  function readSavedPlayer() {
+    try {
+      const saved = JSON.parse(sessionStorage.getItem(playerSessionKey) || 'null');
+      if (saved && typeof saved.name === 'string' && typeof saved.code === 'string'
+        && typeof saved.resumeToken === 'string') return saved;
+      if (saved) {
+        sessionStorage.removeItem(playerSessionKey);
+        console.error('Saved player session was invalid and has been cleared.');
+      }
+    } catch (err) {
+      console.error('Could not read saved player session:', err);
+      setStatus('Could not read the saved room session. Join the room again.', true);
+    }
+    return null;
+  }
+
+  function savePlayerSession(code, name) {
+    try {
+      sessionStorage.setItem(playerSessionKey, JSON.stringify({ code, name, resumeToken }));
+    } catch (err) {
+      console.error('Could not save player session:', err);
+      showError('Could not save your room session. Check browser storage settings.');
+    }
+  }
+
+  function clearSavedPlayer() {
+    try {
+      sessionStorage.removeItem(playerSessionKey);
+    } catch (err) {
+      console.error('Could not clear saved player session:', err);
+      showError('Could not clear the saved room session. Check browser storage settings.');
+    }
+  }
+
+  function loadRoomNotes(code) {
+    if (notesRoomCode === code) return;
+    notesRoomCode = code;
+    try {
+      notesInput.value = localStorage.getItem(`guessing-game-notes-${code}`) || '';
+      notesStatus.textContent = 'Notes are saved in this browser for this room.';
+    } catch (err) {
+      notesInput.value = '';
+      notesStatus.textContent = 'Browser storage is unavailable; notes may not be saved.';
+      console.error('Could not load saved notes:', err);
+    }
+  }
+
+  notesInput.addEventListener('input', () => {
+    if (!notesRoomCode) return;
+    try {
+      localStorage.setItem(`guessing-game-notes-${notesRoomCode}`, notesInput.value);
+      notesStatus.textContent = 'Notes saved.';
+    } catch (err) {
+      notesStatus.textContent = 'Could not save notes. Check browser storage space or settings.';
+      console.error('Could not save notes:', err);
+    }
+  });
 
   function connect() {
     ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}`);
     ws.onopen = () => {
-      status.textContent = 'Connected. Create a room or join with a code.';
       createBtn.disabled = joinBtn.disabled = false;
       devStatus.value = 'open';
+      const saved = readSavedPlayer();
+      if (saved) {
+        nameInput.value = saved.name;
+        codeInput.value = saved.code;
+        resumeToken = saved.resumeToken;
+        autoRejoinPending = true;
+        createBtn.disabled = joinBtn.disabled = true;
+        status.textContent = 'Rejoining your room…';
+        send({ type: 'join', ...saved });
+      } else {
+        status.textContent = 'Connected. Create a room or join with a code.';
+      }
     };
     ws.onclose = () => { setStatus('Disconnected. Refresh to reconnect.', true); devStatus.value = 'closed'; };
     ws.onerror = () => { setStatus('Connection error.', true); devStatus.value = 'error'; };
     ws.onmessage = (ev) => {
       const msg = JSON.parse(ev.data);
-      if (msg.type === 'joined') myId = msg.id;
+      if (msg.type === 'joined') {
+        myId = msg.id;
+        resumeToken = msg.resumeToken;
+        autoRejoinPending = false;
+      }
       else if (msg.type === 'state') render(msg);
-      else if (msg.type === 'error') showError(msg.message);
+      else if (msg.type === 'error') {
+        if (autoRejoinPending) {
+          clearSavedPlayer();
+          resumeToken = null;
+          autoRejoinPending = false;
+        }
+        showError(msg.message);
+      }
+      else if (msg.type === 'kicked') {
+        clearSavedPlayer();
+        resumeToken = null;
+        myId = null;
+        createBtn.disabled = joinBtn.disabled = false;
+        roomView.hidden = true;
+        joinView.hidden = false;
+        codeInput.value = '';
+        setStatus(msg.message || 'You were kicked from the room.', true);
+      }
+      else if (msg.type === 'dev-result') devError.textContent = msg.message;
       else if (msg.type === 'eye') showDevEye(msg);
       devState.textContent = ev.data;
       devState.classList.remove('fresh');
@@ -61,7 +162,9 @@
 
   function showError(text) {
     createBtn.disabled = joinBtn.disabled = false;
-    if (!roomView.hidden) {
+    if (!devConsole.hidden) {
+      devError.textContent = text;
+    } else if (!roomView.hidden) {
       notice.textContent = text;
       notice.hidden = false;
     } else {
@@ -94,17 +197,47 @@
     if (me) {
       joinView.hidden = true;
       roomView.hidden = false;
+      loadRoomNotes(s.code);
+      savePlayerSession(s.code, me.name);
     }
 
     codeBtn.textContent = s.code;
     devRoom.value = `${s.code} · ${s.phase} · round ${s.round}`;
+    roundChip.textContent = `Round ${s.round}`;
+    roundChip.hidden = s.round < 1;
     chatChip.textContent = s.chat === 'voice' ? 'Voice' : 'Text';
     chatChip.hidden = false;
+    spectatorVisibilityControl.hidden = !s.myIsLeader;
+    showSpectatorCards.checked = !!s.spectatorCardsVisible;
+    updateDevSuggestions(s);
     renderPlayers(s);
     renderBanner(s);
     renderPrompt(s, me);
     renderControls(s, me);
     renderLog(s);
+  }
+
+  function updateDevSuggestions(s) {
+    const suggestions = new Set([
+      '/help',
+      '/shuffle_players',
+      '/eye_open',
+    ]);
+    for (const player of s.players) {
+      suggestions.add(`/leader "${player.name}"`);
+      suggestions.add(`/kick "${player.name}"`);
+    }
+    for (const category of [...(s.categories?.all || []), ...(s.categories?.custom || [])]) {
+      suggestions.add(`/category "${category}"`);
+    }
+    suggestions.add('/leader "');
+    suggestions.add('/kick "');
+    suggestions.add('/category "');
+    devSuggestions.replaceChildren(...[...suggestions].map((value) => {
+      const option = document.createElement('option');
+      option.value = value;
+      return option;
+    }));
   }
 
   function renderPlayers(s) {
@@ -198,7 +331,7 @@
       controls.innerHTML = `
         <div class="setting">
           <label for="chatModeSelect">Chat mode</label>
-          <select id="chatModeSelect">
+          <select id="chatModeSelect" ${isHost ? '' : 'disabled'}>
             <option value="text">Text chat</option>
             <option value="voice">Voice chat</option>
           </select>
@@ -478,6 +611,9 @@
   };
 
   $('#devClose').onclick = () => { devConsole.hidden = true; };
+  showSpectatorCards.onchange = () => {
+    send({ type: 'set-spectator-visibility', visible: showSpectatorCards.checked });
+  };
 
   function devSendRaw() {
     devError.textContent = '';
@@ -485,12 +621,47 @@
     if (!raw) return;
     if (raw.startsWith('/')) {
       const cmd = raw.split(/\s+/)[0].toLowerCase();
-      if (cmd === '/eye_open') {
+      if (cmd === '/help') {
+        devError.textContent = [
+          'Dev commands (leaders only):',
+          '/leader "Player Name" — promote a player to host and grant dev commands',
+          '/kick "Player Name" — remove a player from the room',
+          '/category "Category" — set the category before anyone submits a word',
+          '/shuffle_players — shuffle player order during secret assignment',
+          '/eye_open — show your own secret card',
+          '/help — show this command list',
+        ].join('\n');
+        return;
+      } else if (cmd === '/leader') {
+        const match = raw.match(/^\/leader\s+"([^"]+)"\s*$/i);
+        if (!match) {
+          devError.textContent = 'Use /leader "player name".';
+        } else {
+          send({ type: 'dev-leader', name: match[1] });
+          devSend.value = '';
+        }
+      } else if (cmd === '/category') {
+        const match = raw.match(/^\/category\s+"([^"]+)"\s*$/i);
+        if (!match) {
+          devError.textContent = 'Use /category "category name".';
+        } else {
+          send({ type: 'dev-category', name: match[1] });
+          devSend.value = '';
+        }
+      } else if (cmd === '/eye_open') {
         send({ type: 'dev-eye' });
         devSend.value = '';
       } else if (cmd === '/shuffle_players') {
         send({ type: 'dev-shuffle' });
         devSend.value = '';
+      } else if (cmd === '/kick') {
+        const match = raw.match(/^\/kick\s+"([^"]+)"\s*$/i);
+        if (!match) {
+          devError.textContent = 'Use /kick "player name".';
+        } else {
+          send({ type: 'dev-kick', name: match[1] });
+          devSend.value = '';
+        }
       } else {
         devError.textContent = `Unknown command: ${cmd}`;
       }
@@ -504,7 +675,22 @@
     }
   }
   devSendBtn.onclick = devSendRaw;
-  devSend.onkeydown = (e) => { if (e.key === 'Enter') devSendRaw(); };
+  devSend.onkeydown = (e) => {
+    if (e.key === 'Enter') {
+      devSendRaw();
+    } else if (e.key === 'Tab') {
+      const input = devSend.value.trimStart().toLowerCase();
+      if (!input.startsWith('/')) return;
+      const match = [...devSuggestions.options]
+        .map((option) => option.value)
+        .find((value) => value.toLowerCase().startsWith(input) && value.toLowerCase() !== input);
+      if (match) {
+        e.preventDefault();
+        devSend.value = match;
+        devSend.setSelectionRange(match.length, match.length);
+      }
+    }
+  };
 
   connect();
 })();

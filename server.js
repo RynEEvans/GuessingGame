@@ -87,6 +87,10 @@ function playerOf(room, ws) {
   return room.players.find((p) => p.ws === ws);
 }
 
+function isLeader(room, player) {
+  return (room.leaders || [room.hostId]).includes(player.id);
+}
+
 function onlineInOrder(room) {
   return room.players.filter((p) => isOnline(p) && !p.spec);
 }
@@ -183,6 +187,8 @@ function openReviewPhase(room) {
 
 function publicState(room, forId) {
   const revealAll = room.phase === 'reveal' || room.phase === 'over';
+  const viewer = room.players.find((p) => p.id === forId);
+  const hideSpectatorCards = viewer?.spec && !room.spectatorCardsVisible;
   const order = roundOrder(room);
   const deal = {};
   const n = order.length;
@@ -223,6 +229,8 @@ function publicState(room, forId) {
     log: room.log,
     winnerId: room.winnerId,
     hostId: room.hostId,
+    myIsLeader: viewer ? isLeader(room, viewer) : false,
+    spectatorCardsVisible: !!room.spectatorCardsVisible,
     scoresToWin: SCORE_TO_WIN,
     turnId: room.turnId,
     awaitingAnswer: !!room.poll,
@@ -253,7 +261,7 @@ function publicState(room, forId) {
     players: room.players.map((p) => {
       const s = room.secrets[p.id];
       const revealMine = p.id === forId && s?.resolved;
-      const visible = s && (revealAll || p.id !== forId || revealMine);
+      const visible = s && !hideSpectatorCards && (revealAll || p.id !== forId || revealMine);
       return {
         id: p.id,
         name: p.name,
@@ -438,7 +446,7 @@ wss.on('connection', (ws) => {
       case 'create': {
         const name = String(msg.name || '').trim().slice(0, 20);
         if (!name) return sendTo(ws, { type: 'error', message: 'Enter a name.' });
-        const player = { id: crypto.randomUUID(), name, score: 0, ws };
+        const player = { id: crypto.randomUUID(), resumeToken: crypto.randomUUID(), name, score: 0, ws };
         const room = {
           code: randomCode(),
           chat: msg.chat === 'voice' ? 'voice' : 'text',
@@ -452,6 +460,8 @@ wss.on('connection', (ws) => {
           prevCycle: null,
           ready: {},
           hostId: player.id,
+          leaders: [player.id],
+          spectatorCardsVisible: false,
           customCategories: {},
           enabledCategories: Array.isArray(msg.categories) ? msg.categories.filter((c) => typeof c === 'string') : null,
           poll: null,
@@ -462,7 +472,7 @@ wss.on('connection', (ws) => {
           reviews: [],
         };
         rooms.set(room.code, room);
-        sendTo(ws, { type: 'joined', id: player.id });
+        sendTo(ws, { type: 'joined', id: player.id, resumeToken: player.resumeToken });
         sendTo(ws, publicState(room, player.id));
         break;
       }
@@ -470,16 +480,20 @@ wss.on('connection', (ws) => {
       case 'join': {
         const name = String(msg.name || '').trim().slice(0, 20);
         const code = String(msg.code || '').trim().toUpperCase();
+        const resumeToken = String(msg.resumeToken || '').trim();
         const room = rooms.get(code);
         if (!name) return sendTo(ws, { type: 'error', message: 'Enter a name.' });
         if (!room) return sendTo(ws, { type: 'error', message: 'No room with that code.' });
         const returningPlayer = room.players.find((p) =>
-          !isOnline(p) && p.name.toLowerCase() === name.toLowerCase());
+          (resumeToken && p.resumeToken === resumeToken)
+          || (!isOnline(p) && p.name.toLowerCase() === name.toLowerCase()));
         if (returningPlayer) {
+          if (returningPlayer.ws !== ws && returningPlayer.ws.readyState === 1) {
+            returningPlayer.ws.close();
+          }
           returningPlayer.ws = ws;
-          returningPlayer.spec = room.phase !== 'lobby';
           pushLog(room, { type: 'system', text: `${returningPlayer.name} rejoined.` });
-          sendTo(ws, { type: 'joined', id: returningPlayer.id });
+          sendTo(ws, { type: 'joined', id: returningPlayer.id, resumeToken: returningPlayer.resumeToken });
           broadcast(room);
           break;
         }
@@ -487,10 +501,10 @@ wss.on('connection', (ws) => {
         if (asPlayer && room.players.filter((p) => !p.spec).length >= 4) {
           return sendTo(ws, { type: 'error', message: 'Room is full (max 4 players).' });
         }
-        const player = { id: crypto.randomUUID(), name, score: 0, ws, spec: !asPlayer };
+        const player = { id: crypto.randomUUID(), resumeToken: crypto.randomUUID(), name, score: 0, ws, spec: !asPlayer };
         room.players.push(player);
         pushLog(room, { type: 'system', text: asPlayer ? `${name} joined.` : `${name} joined — watching and in next round.` });
-        sendTo(ws, { type: 'joined', id: player.id });
+        sendTo(ws, { type: 'joined', id: player.id, resumeToken: player.resumeToken });
         broadcast(room);
         break;
       }
@@ -656,6 +670,8 @@ wss.on('connection', (ws) => {
       case 'dev-shuffle': {
         const room = findRoom(ws);
         if (!room) return;
+        const player = playerOf(room, ws);
+        if (!player || !isLeader(room, player)) return sendTo(ws, { type: 'error', message: 'Only a room leader can use dev commands.' });
         if (room.phase !== 'assigning') return sendTo(ws, { type: 'error', message: 'Only shuffle at the start of a round.' });
         if (Object.keys(room.pendingSecrets).length > 0 || Object.keys(room.submittedSecrets).length > 0) {
           return sendTo(ws, { type: 'error', message: 'Wait until everyone picks a word before shuffling.' });
@@ -669,7 +685,7 @@ wss.on('connection', (ws) => {
       case 'dev-eye': {
         const room = findRoom(ws);
         const player = room ? playerOf(room, ws) : null;
-        if (!player) return sendTo(ws, { type: 'error', message: 'Join a room first.' });
+        if (!player || !isLeader(room, player)) return sendTo(ws, { type: 'error', message: 'Only a room leader can use dev commands.' });
         const secret = room.secrets[player.id];
         sendTo(ws, {
           type: 'eye',
@@ -677,6 +693,109 @@ wss.on('connection', (ws) => {
           giverId: secret ? secret.giverId : null,
           phase: room.phase,
         });
+        break;
+      }
+
+      case 'dev-category': {
+        const room = findRoom(ws);
+        const player = room ? playerOf(room, ws) : null;
+        const requested = String(msg.name || '').trim();
+        if (!player || !isLeader(room, player)) return sendTo(ws, { type: 'error', message: 'Only a room leader can use dev commands.' });
+        if (room.phase !== 'assigning') {
+          return sendTo(ws, { type: 'error', message: 'Set the category during secret assignment.' });
+        }
+        if (Object.keys(room.pendingSecrets).length || Object.keys(room.submittedSecrets).length) {
+          return sendTo(ws, { type: 'error', message: 'The category can only be changed before anyone submits a word.' });
+        }
+        const category = [...Object.keys(CATEGORIES), ...Object.keys(room.customCategories)]
+          .find((name) => name.toLowerCase() === requested.toLowerCase());
+        if (!category) {
+          return sendTo(ws, { type: 'error', message: `No category named "${requested}" exists.` });
+        }
+        room.category = category;
+        pushLog(room, { type: 'system', text: `${player.name} set the category to ${category}.` });
+        sendTo(ws, { type: 'dev-result', message: `Category set to ${category}.` });
+        broadcast(room);
+        break;
+      }
+
+      case 'dev-leader': {
+        const room = findRoom(ws);
+        const player = room ? playerOf(room, ws) : null;
+        const name = String(msg.name || '').trim();
+        if (!player || !isLeader(room, player)) return sendTo(ws, { type: 'error', message: 'Only a room leader can promote players.' });
+        if (!name) return sendTo(ws, { type: 'error', message: 'Enter a player name to promote.' });
+        const target = room.players.find((p) => p.name.toLowerCase() === name.toLowerCase());
+        if (!target) return sendTo(ws, { type: 'error', message: `No player named "${name}" is in this room.` });
+        if (isLeader(room, target)) return sendTo(ws, { type: 'dev-result', message: `${target.name} is already a leader.` });
+
+        room.leaders = [...(room.leaders || [room.hostId]), target.id];
+        room.hostId = target.id;
+        pushLog(room, { type: 'system', text: `${target.name} was promoted to room leader.` });
+        sendTo(ws, { type: 'dev-result', message: `${target.name} is now a leader with host and dev commands.` });
+        broadcast(room);
+        break;
+      }
+
+      case 'dev-kick': {
+        const room = findRoom(ws);
+        const player = room ? playerOf(room, ws) : null;
+        const name = String(msg.name || '').trim();
+        if (!player || !isLeader(room, player)) return sendTo(ws, { type: 'error', message: 'Only a room leader can use dev commands.' });
+        if (!name) return sendTo(ws, { type: 'error', message: 'Enter a player name to kick.' });
+        const target = room.players.find((p) => p.name.toLowerCase() === name.toLowerCase());
+        if (!target) return sendTo(ws, { type: 'error', message: `No player named "${name}" is in this room.` });
+
+        if (isOnline(target)) {
+          sendTo(target.ws, { type: 'kicked', message: `You were kicked from room ${room.code}.` });
+        }
+        room.players = room.players.filter((p) => p !== target);
+        room.leaders = (room.leaders || [room.hostId]).filter((id) => id !== target.id);
+        delete room.ready[target.id];
+        delete room.submittedSecrets[target.id];
+        delete room.pendingSecrets[target.id];
+        delete room.secrets[target.id];
+        room.reviews = room.reviews.filter((review) =>
+          review.giverId !== target.id && review.targetId !== target.id);
+        for (const review of room.reviews) delete review.votes[target.id];
+        room.seatOrder = room.seatOrder?.filter((p) => p.id !== target.id) ?? null;
+        if (room.turnId === target.id) room.turnId = null;
+        if (room.poll) {
+          if (room.poll.askerId === target.id) room.poll = null;
+          else delete room.poll.votes[target.id];
+        }
+        if (room.hostId === target.id) {
+          room.hostId = room.players.find(isOnline)?.id || room.players[0]?.id || null;
+          if (room.hostId && !room.leaders.includes(room.hostId)) room.leaders.push(room.hostId);
+        }
+        if (room.winnerId === target.id) {
+          room.winnerId = null;
+          if (room.phase === 'over') room.phase = 'reveal';
+        }
+
+        sendTo(ws, { type: 'dev-result', message: `Kicked ${target.name}.` });
+        pushLog(room, { type: 'system', text: `${target.name} was kicked.` });
+        if (room.players.length === 0) {
+          rooms.delete(room.code);
+          break;
+        }
+        if (['assigning', 'review', 'questioning'].includes(room.phase)) {
+          const online = onlineInOrder(room);
+          if (online.length < 2) {
+            room.phase = 'lobby';
+            room.submittedSecrets = {};
+            room.pendingSecrets = {};
+            room.secrets = {};
+            room.reviews = [];
+            room.poll = null;
+            room.ready = {};
+            room.log = [];
+            pushLog(room, { type: 'system', text: 'Not enough players. Waiting for more.' });
+          } else {
+            startAssignmentRound(room, `${target.name} was kicked — pick your cards again.`);
+          }
+        }
+        broadcast(room);
         break;
       }
 
@@ -752,8 +871,22 @@ wss.on('connection', (ws) => {
       case 'set-chat': {
         const room = findRoom(ws);
         if (!room) return;
+        const player = playerOf(room, ws);
+        if (!player || player.id !== room.hostId) return sendTo(ws, { type: 'error', message: 'Only the room host can change settings.' });
         if (room.phase !== 'lobby') return sendTo(ws, { type: 'error', message: 'Only changeable before the game starts.' });
         room.chat = msg.chat === 'voice' ? 'voice' : 'text';
+        broadcast(room);
+        break;
+      }
+
+      case 'set-spectator-visibility': {
+        const room = findRoom(ws);
+        if (!room) return;
+        const player = playerOf(room, ws);
+        if (!player || !isLeader(room, player)) {
+          return sendTo(ws, { type: 'error', message: 'Only a room leader can change spectator card visibility.' });
+        }
+        room.spectatorCardsVisible = !!msg.visible;
         broadcast(room);
         break;
       }
@@ -776,35 +909,7 @@ wss.on('connection', (ws) => {
     const player = playerOf(room, ws);
     if (!player) return;
 
-    delete room.ready[player.id];
-    if (player.id === room.hostId) {
-      const nextHost = room.players.find((p) => p !== player && isOnline(p));
-      if (nextHost) room.hostId = nextHost.id;
-    }
-
-    const online = onlineInOrder(room);
     pushLog(room, { type: 'system', text: `${player.name} disconnected.` });
-
-    if (room.phase === 'assigning' || room.phase === 'review' || room.phase === 'questioning') {
-      if (online.length < 2) {
-        room.phase = 'lobby';
-        room.submittedSecrets = {};
-        room.pendingSecrets = {};
-        room.secrets = {};
-        room.reviews = [];
-        room.poll = null;
-        room.ready = {};
-        room.log = [];
-        pushLog(room, { type: 'system', text: 'Not enough players. Waiting for more.' });
-      } else {
-        startAssignmentRound(room, `${player.name} left — pick your cards again.`);
-      }
-    } else if (online.length < 2 && room.phase !== 'lobby') {
-      room.phase = 'lobby';
-      room.ready = {};
-      room.log = [];
-      pushLog(room, { type: 'system', text: 'Not enough players. Waiting for more.' });
-    }
     broadcast(room);
   });
 });
