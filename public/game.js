@@ -9,6 +9,9 @@
   const createBtn = $('#createBtn');
   const joinBtn = $('#joinBtn');
   const codeBtn = $('#codeBtn');
+  const roomOptions = $('#roomOptions');
+  const hideRoomCode = $('#hideRoomCode');
+  const closeRoomToNewPlayers = $('#closeRoomToNewPlayers');
   const leaveRoomBtn = $('#leaveRoomBtn');
   const playerList = $('#playerList');
   const roundChip = $('#roundChip');
@@ -261,6 +264,10 @@
         setStatus(msg.message || 'You were kicked from the room.', true);
       }
       else if (msg.type === 'dev-result') devError.textContent = msg.message;
+      else if (msg.type === 'category-result') {
+        notice.textContent = msg.message;
+        notice.hidden = false;
+      }
       else if (msg.type === 'eye') showDevEye(msg);
       devState.textContent = ev.data;
       devState.classList.remove('fresh');
@@ -316,8 +323,13 @@
       savePlayerSession(s.code, me.name);
     }
 
-    codeBtn.textContent = s.code;
-    devRoom.value = `${s.code} · ${s.phase} · round ${s.round}`;
+    codeBtn.textContent = s.roomCodeHidden ? 'Hidden' : s.code;
+    codeBtn.disabled = !!s.roomCodeHidden;
+    codeBtn.title = s.roomCodeHidden ? 'The host hid the room code' : 'Copy code';
+    devRoom.value = `${s.roomCodeHidden ? 'Hidden' : s.code} · ${s.phase} · round ${s.round}`;
+    roomOptions.hidden = !me || me.id !== s.hostId;
+    hideRoomCode.checked = !!s.roomCodeHidden;
+    closeRoomToNewPlayers.checked = !!s.closedToNewPlayers;
     roundChip.textContent = `Round ${s.round} · Rotation ${s.rotation}`;
     roundChip.hidden = s.round < 1;
     chatChip.textContent = s.chat === 'voice' ? 'Voice' : 'Text';
@@ -477,7 +489,7 @@
             </select>
           </div>
           <div class="catadd">
-            <input id="catInput" type="text" maxlength="30" placeholder="Add your own category…" ${isHost ? '' : 'disabled'} />
+            <input id="catInput" type="text" maxlength="300" placeholder="Add categories, separated by commas…" ${isHost ? '' : 'disabled'} />
             <button id="catAddBtn" class="primary" ${isHost ? '' : 'disabled'}>Add</button>
           </div>
         </div>`;
@@ -506,7 +518,13 @@
       const catInput = $('#catInput');
       const catAddBtn = $('#catAddBtn');
       if (catAddBtn && !catAddBtn.disabled) {
-        const add = () => { const v = catInput.value.trim(); if (v) { send({ type: 'add-category', name: v }); catInput.value = ''; } };
+        const add = () => {
+          const names = [...new Set(catInput.value.split(',').map((name) => name.trim()).filter(Boolean))];
+          if (names.length) {
+            send({ type: 'add-category', names });
+            catInput.value = '';
+          }
+        };
         catAddBtn.onclick = add;
         catInput.onkeydown = (e) => { if (e.key === 'Enter') add(); };
       }
@@ -732,7 +750,7 @@
   };
 
   codeBtn.onclick = () => {
-    if (navigator.clipboard) navigator.clipboard.writeText(codeBtn.textContent);
+    if (!codeBtn.disabled && navigator.clipboard) navigator.clipboard.writeText(codeBtn.textContent);
   };
 
   $('#logoG').onclick = () => {
@@ -747,6 +765,13 @@
   showSpectatorCards.onchange = () => {
     send({ type: 'set-spectator-visibility', visible: showSpectatorCards.checked });
   };
+  const updateRoomOptions = () => send({
+    type: 'set-room-options',
+    roomCodeHidden: hideRoomCode.checked,
+    closedToNewPlayers: closeRoomToNewPlayers.checked,
+  });
+  hideRoomCode.onchange = updateRoomOptions;
+  closeRoomToNewPlayers.onchange = updateRoomOptions;
 
   function devSendRaw() {
     devError.textContent = '';

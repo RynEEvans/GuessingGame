@@ -226,6 +226,8 @@ function publicState(room, forId) {
     phase: room.phase,
     round: room.round,
     roundLimit: room.roundLimit,
+    roomCodeHidden: room.roomCodeHidden,
+    closedToNewPlayers: room.closedToNewPlayers,
     log: room.log,
     winnerId: room.winnerId,
     hostId: room.hostId,
@@ -509,6 +511,8 @@ wss.on('connection', (ws) => {
           phase: 'lobby',
           round: 0,
           roundLimit: 3,
+          roomCodeHidden: false,
+          closedToNewPlayers: false,
           rotation: 0,
           log: [],
           winnerId: null,
@@ -543,7 +547,7 @@ wss.on('connection', (ws) => {
         if (!room) return sendTo(ws, { type: 'error', message: 'No room with that code.' });
         const returningPlayer = room.players.find((p) =>
           (resumeToken && p.resumeToken === resumeToken)
-          || (!isOnline(p) && p.name.toLowerCase() === name.toLowerCase()));
+          || (!room.closedToNewPlayers && !isOnline(p) && p.name.toLowerCase() === name.toLowerCase()));
         if (returningPlayer) {
           if (returningPlayer.ws !== ws && returningPlayer.ws.readyState === 1) {
             returningPlayer.ws.close();
@@ -553,6 +557,9 @@ wss.on('connection', (ws) => {
           sendTo(ws, { type: 'joined', id: returningPlayer.id, resumeToken: returningPlayer.resumeToken });
           broadcast(room);
           break;
+        }
+        if (room.closedToNewPlayers) {
+          return sendTo(ws, { type: 'error', message: 'This room is closed to new players.' });
         }
         const asPlayer = room.phase === 'lobby';
         if (asPlayer && room.players.filter((p) => !p.spec).length >= 4) {
@@ -886,15 +893,35 @@ wss.on('connection', (ws) => {
         if (!player) return;
         if (room.phase !== 'lobby') return sendTo(ws, { type: 'error', message: 'Settings only before the game starts.' });
         if (player.id !== room.hostId) return sendTo(ws, { type: 'error', message: 'Only the host can change settings.' });
-        const name = String(msg.name || '').trim().slice(0, 30);
-        if (!name) return sendTo(ws, { type: 'error', message: 'Enter a category name.' });
-        if (name in CATEGORIES || name in room.customCategories) {
-          return sendTo(ws, { type: 'error', message: 'That category already exists.' });
+        const requested = Array.isArray(msg.names) ? msg.names : [msg.name];
+        const names = [...new Set(requested
+          .filter((name) => typeof name === 'string')
+          .map((name) => name.trim())
+          .filter(Boolean))];
+        if (names.length === 0) return sendTo(ws, { type: 'error', message: 'Enter at least one category name.' });
+        if (names.some((name) => name.length > 30)) {
+          return sendTo(ws, { type: 'error', message: 'Each category name must be 30 characters or fewer.' });
         }
-        room.customCategories[name] = [];
-        if (room.enabledCategories) room.enabledCategories.push(name);
-        pushLog(room, { type: 'system', text: `${player.name} added a category: ${name}.` });
-        broadcast(room);
+        const knownNames = new Set([...Object.keys(CATEGORIES), ...Object.keys(room.customCategories)].map((name) => name.toLowerCase()));
+        const added = names.filter((name) => !knownNames.has(name.toLowerCase()));
+        const duplicates = names.filter((name) => knownNames.has(name.toLowerCase()));
+        for (const name of added) {
+          room.customCategories[name] = [];
+          if (room.enabledCategories) room.enabledCategories.push(name);
+        }
+        if (added.length) {
+          pushLog(room, { type: 'system', text: `${player.name} added ${added.length === 1 ? 'a category' : `${added.length} categories`}: ${added.join(', ')}.` });
+        }
+        if (added.length || duplicates.length) {
+          broadcast(room);
+          sendTo(ws, {
+            type: 'category-result',
+            message: [
+              added.length ? `Added: ${added.join(', ')}.` : '',
+              duplicates.length ? `Already exists: ${duplicates.join(', ')}.` : '',
+            ].filter(Boolean).join(' '),
+          });
+        }
         break;
       }
 
@@ -939,6 +966,19 @@ wss.on('connection', (ws) => {
           return sendTo(ws, { type: 'error', message: 'Choose a round limit between 1 and 20, or unlimited.' });
         }
         room.roundLimit = limit;
+        broadcast(room);
+        break;
+      }
+
+      case 'set-room-options': {
+        const room = findRoom(ws);
+        if (!room) return;
+        const player = playerOf(room, ws);
+        if (!player || player.id !== room.hostId) {
+          return sendTo(ws, { type: 'error', message: 'Only the room host can change room options.' });
+        }
+        room.roomCodeHidden = !!msg.roomCodeHidden;
+        room.closedToNewPlayers = !!msg.closedToNewPlayers;
         broadcast(room);
         break;
       }

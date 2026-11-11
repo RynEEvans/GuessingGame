@@ -197,6 +197,21 @@ button.guess { background: var(--accent2); color: #06351f; font-weight: 700; }
   margin: 0;
   accent-color: var(--accent);
 }
+.room-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  margin: 8px 0 0 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.room-options label { display: inline-flex; align-items: center; gap: 5px; }
+.room-options input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--accent);
+}
 .players { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
 
 .player {
