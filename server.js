@@ -6,7 +6,6 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3000;
-const SCORE_TO_WIN = 3;
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
 const MIME = {
@@ -226,12 +225,12 @@ function publicState(room, forId) {
     },
     phase: room.phase,
     round: room.round,
+    roundLimit: room.roundLimit,
     log: room.log,
     winnerId: room.winnerId,
     hostId: room.hostId,
     myIsLeader: viewer ? isLeader(room, viewer) : false,
     spectatorCardsVisible: !!room.spectatorCardsVisible,
-    scoresToWin: SCORE_TO_WIN,
     turnId: room.turnId,
     rotation: room.rotation,
     awaitingAnswer: !!room.poll,
@@ -297,6 +296,56 @@ function pushLog(room, entry) {
   room.log.push(entry);
 }
 
+function removePlayer(room, target, departureText, restartText) {
+  const wasActive = !target.spec;
+  room.players = room.players.filter((p) => p !== target);
+  room.leaders = (room.leaders || [room.hostId]).filter((id) => id !== target.id);
+  delete room.ready[target.id];
+  delete room.submittedSecrets[target.id];
+  delete room.pendingSecrets[target.id];
+  delete room.secrets[target.id];
+  room.reviews = room.reviews.filter((review) =>
+    review.giverId !== target.id && review.targetId !== target.id);
+  for (const review of room.reviews) delete review.votes[target.id];
+  room.seatOrder = room.seatOrder?.filter((p) => p.id !== target.id) ?? null;
+  if (room.turnId === target.id) room.turnId = null;
+  if (room.poll) {
+    if (room.poll.askerId === target.id) room.poll = null;
+    else delete room.poll.votes[target.id];
+  }
+  if (room.hostId === target.id) {
+    room.hostId = room.players.find(isOnline)?.id || room.players[0]?.id || null;
+    if (room.hostId && !room.leaders.includes(room.hostId)) room.leaders.push(room.hostId);
+  }
+  if (room.winnerId === target.id) {
+    room.winnerId = null;
+    if (room.phase === 'over') room.phase = 'reveal';
+  }
+
+  pushLog(room, { type: 'system', text: departureText });
+  if (room.players.length === 0) {
+    rooms.delete(room.code);
+    return false;
+  }
+  if (wasActive && ['assigning', 'review', 'questioning'].includes(room.phase)) {
+    const online = onlineInOrder(room);
+    if (online.length < 2) {
+      room.phase = 'lobby';
+      room.submittedSecrets = {};
+      room.pendingSecrets = {};
+      room.secrets = {};
+      room.reviews = [];
+      room.poll = null;
+      room.ready = {};
+      room.log = [];
+      pushLog(room, { type: 'system', text: 'Not enough players. Waiting for more.' });
+    } else {
+      startAssignmentRound(room, restartText);
+    }
+  }
+  return true;
+}
+
 function solveAward(room) {
   const n = onlineInOrder(room).length;
   const done = onlineInOrder(room).filter((p) => room.secrets[p.id]?.resolved).length;
@@ -344,9 +393,11 @@ function endRound(room) {
       text: `${p.name}${room.secrets[p.id].resolved ? ' solved' : ' revealed (last one left)'} "${room.secrets[p.id].word}" (given by ${giver.name}).`,
     });
   }
-  const winner = onlineInOrder(room).find((p) => p.score >= SCORE_TO_WIN);
-  if (winner) {
-    room.winnerId = winner.id;
+  if (room.roundLimit !== null && room.round >= room.roundLimit) {
+    const players = onlineInOrder(room);
+    const highScore = Math.max(...players.map((p) => p.score));
+    const leaders = players.filter((p) => p.score === highScore);
+    room.winnerId = leaders.length === 1 ? leaders[0].id : null;
     room.phase = 'over';
   } else {
     room.phase = 'reveal';
@@ -457,6 +508,7 @@ wss.on('connection', (ws) => {
           players: [player],
           phase: 'lobby',
           round: 0,
+          roundLimit: 3,
           rotation: 0,
           log: [],
           winnerId: null,
@@ -524,6 +576,15 @@ wss.on('connection', (ws) => {
         if (player.id in room.ready) delete room.ready[player.id];
         else room.ready[player.id] = true;
         broadcast(room);
+        break;
+      }
+
+      case 'leave': {
+        const room = findRoom(ws);
+        const player = room ? playerOf(room, ws) : null;
+        if (!room || !player) return sendTo(ws, { type: 'error', message: 'You are not in a room.' });
+        sendTo(ws, { type: 'left' });
+        if (removePlayer(room, player, `${player.name} left the room.`, `${player.name} left — pick your cards again.`)) broadcast(room);
         break;
       }
 
@@ -780,53 +841,8 @@ wss.on('connection', (ws) => {
         if (isOnline(target)) {
           sendTo(target.ws, { type: 'kicked', message: `You were kicked from room ${room.code}.` });
         }
-        room.players = room.players.filter((p) => p !== target);
-        room.leaders = (room.leaders || [room.hostId]).filter((id) => id !== target.id);
-        delete room.ready[target.id];
-        delete room.submittedSecrets[target.id];
-        delete room.pendingSecrets[target.id];
-        delete room.secrets[target.id];
-        room.reviews = room.reviews.filter((review) =>
-          review.giverId !== target.id && review.targetId !== target.id);
-        for (const review of room.reviews) delete review.votes[target.id];
-        room.seatOrder = room.seatOrder?.filter((p) => p.id !== target.id) ?? null;
-        if (room.turnId === target.id) room.turnId = null;
-        if (room.poll) {
-          if (room.poll.askerId === target.id) room.poll = null;
-          else delete room.poll.votes[target.id];
-        }
-        if (room.hostId === target.id) {
-          room.hostId = room.players.find(isOnline)?.id || room.players[0]?.id || null;
-          if (room.hostId && !room.leaders.includes(room.hostId)) room.leaders.push(room.hostId);
-        }
-        if (room.winnerId === target.id) {
-          room.winnerId = null;
-          if (room.phase === 'over') room.phase = 'reveal';
-        }
-
         sendTo(ws, { type: 'dev-result', message: `Kicked ${target.name}.` });
-        pushLog(room, { type: 'system', text: `${target.name} was kicked.` });
-        if (room.players.length === 0) {
-          rooms.delete(room.code);
-          break;
-        }
-        if (['assigning', 'review', 'questioning'].includes(room.phase)) {
-          const online = onlineInOrder(room);
-          if (online.length < 2) {
-            room.phase = 'lobby';
-            room.submittedSecrets = {};
-            room.pendingSecrets = {};
-            room.secrets = {};
-            room.reviews = [];
-            room.poll = null;
-            room.ready = {};
-            room.log = [];
-            pushLog(room, { type: 'system', text: 'Not enough players. Waiting for more.' });
-          } else {
-            startAssignmentRound(room, `${target.name} was kicked — pick your cards again.`);
-          }
-        }
-        broadcast(room);
+        if (removePlayer(room, target, `${target.name} was kicked.`, `${target.name} was kicked — pick your cards again.`)) broadcast(room);
         break;
       }
 
@@ -910,6 +926,23 @@ wss.on('connection', (ws) => {
         break;
       }
 
+      case 'set-round-limit': {
+        const room = findRoom(ws);
+        if (!room) return;
+        const player = playerOf(room, ws);
+        if (!player || player.id !== room.hostId) {
+          return sendTo(ws, { type: 'error', message: 'Only the room host can change settings.' });
+        }
+        if (room.phase !== 'lobby') return sendTo(ws, { type: 'error', message: 'Round limit can only be changed before the game starts.' });
+        const limit = msg.roundLimit === null ? null : Number(msg.roundLimit);
+        if (limit !== null && (!Number.isInteger(limit) || limit < 1 || limit > 20)) {
+          return sendTo(ws, { type: 'error', message: 'Choose a round limit between 1 and 20, or unlimited.' });
+        }
+        room.roundLimit = limit;
+        broadcast(room);
+        break;
+      }
+
       case 'set-spectator-visibility': {
         const room = findRoom(ws);
         if (!room) return;
@@ -927,6 +960,7 @@ wss.on('connection', (ws) => {
         if (!room) return;
         if (room.phase !== 'over') return;
         for (const p of room.players) p.score = 0;
+        room.round = 0;
         startAssignmentRound(room);
         broadcast(room);
         break;

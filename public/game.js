@@ -9,6 +9,7 @@
   const createBtn = $('#createBtn');
   const joinBtn = $('#joinBtn');
   const codeBtn = $('#codeBtn');
+  const leaveRoomBtn = $('#leaveRoomBtn');
   const playerList = $('#playerList');
   const roundChip = $('#roundChip');
   const spectatorVisibilityControl = $('#spectatorVisibilityControl');
@@ -162,18 +163,35 @@
   function formatNote(command) {
     notesInput.focus();
     document.execCommand(command);
+    updateNoteToolbar();
     saveNotes();
   }
 
-  for (const [button, command] of [
+  const noteFormatButtons = [
     [notesBold, 'bold'],
     [notesItalic, 'italic'],
     [notesUnderline, 'underline'],
     [notesStrike, 'strikeThrough'],
-  ]) {
+  ];
+
+  function updateNoteToolbar() {
+    const selection = window.getSelection();
+    const selectionInsideNotes = selection?.rangeCount
+      && notesInput.contains(selection.getRangeAt(0).commonAncestorContainer);
+    for (const [button, command] of noteFormatButtons) {
+      const active = !!selectionInsideNotes && document.queryCommandState(command);
+      button.setAttribute('aria-pressed', String(active));
+    }
+  }
+
+  for (const [button, command] of noteFormatButtons) {
     button.addEventListener('mousedown', (event) => event.preventDefault());
     button.addEventListener('click', () => formatNote(command));
   }
+  notesInput.addEventListener('keyup', updateNoteToolbar);
+  notesInput.addEventListener('mouseup', updateNoteToolbar);
+  notesInput.addEventListener('focus', updateNoteToolbar);
+  document.addEventListener('selectionchange', updateNoteToolbar);
 
   notesX.addEventListener('mousedown', (event) => event.preventDefault());
   notesX.addEventListener('click', () => insertNoteMark('✕'));
@@ -181,6 +199,7 @@
   notesCheck.addEventListener('click', () => insertNoteMark('✓'));
 
   notesInput.addEventListener('input', () => {
+    updateNoteToolbar();
     saveNotes();
   });
 
@@ -210,8 +229,19 @@
         myId = msg.id;
         resumeToken = msg.resumeToken;
         autoRejoinPending = false;
+        leaveRoomBtn.disabled = false;
       }
       else if (msg.type === 'state') render(msg);
+      else if (msg.type === 'left') {
+        clearSavedPlayer();
+        resumeToken = null;
+        myId = null;
+        createBtn.disabled = joinBtn.disabled = false;
+        leaveRoomBtn.disabled = false;
+        roomView.hidden = true;
+        joinView.hidden = false;
+        setStatus('You left the room. Join another room or create one.');
+      }
       else if (msg.type === 'error') {
         if (autoRejoinPending) {
           clearSavedPlayer();
@@ -239,8 +269,14 @@
     };
   }
 
+  leaveRoomBtn.addEventListener('click', () => {
+    leaveRoomBtn.disabled = true;
+    send({ type: 'leave' });
+  });
+
   function showError(text) {
     createBtn.disabled = joinBtn.disabled = false;
+    leaveRoomBtn.disabled = false;
     if (!devConsole.hidden) {
       devError.textContent = text;
     } else if (!roomView.hidden) {
@@ -348,7 +384,9 @@
       ? 'Ask your yes/no questions out loud (voice chat), or guess your word outright.'
       : 'Words on the table. Ask the room yes/no questions, or guess your word outright.');
     else if (s.phase === 'reveal') text = `Round ${s.round} over!`;
-    else if (s.phase === 'over') text = `🏆 <b>${escapeHtml(winner?.name || '')}</b> wins the game!`;
+    else if (s.phase === 'over') text = winner
+      ? `🏆 <b>${escapeHtml(winner.name)}</b> wins with ${winner.score} points after ${s.round} round${s.round === 1 ? '' : 's'}!`
+      : `Game ended after ${s.round} rounds in a tie.`;
     if (text) { banner.innerHTML = text; banner.hidden = false; }
     else banner.hidden = true;
   }
@@ -428,6 +466,16 @@
           ${isHost ? '' : '<div class="muted" style="margin-bottom:6px">Only the host can change these.</div>'}
           <label class="devlabel" for="catList">Categories</label>
           ${catRows ? `<div id="catList" class="catlist">${catRows}</div>` : '<div class="muted">No categories loaded.</div>'}
+          <div class="setting">
+            <label for="roundLimitSelect">Rounds per game</label>
+            <select id="roundLimitSelect" ${isHost ? '' : 'disabled'}>
+              <option value="1">1 round</option>
+              <option value="3">3 rounds</option>
+              <option value="5">5 rounds</option>
+              <option value="10">10 rounds</option>
+              <option value="null">Unlimited</option>
+            </select>
+          </div>
           <div class="catadd">
             <input id="catInput" type="text" maxlength="30" placeholder="Add your own category…" ${isHost ? '' : 'disabled'} />
             <button id="catAddBtn" class="primary" ${isHost ? '' : 'disabled'}>Add</button>
@@ -435,6 +483,11 @@
         </div>`;
       $('#chatModeSelect').value = s.chat;
       $('#chatModeSelect').onchange = (e) => send({ type: 'set-chat', chat: e.target.value });
+      $('#roundLimitSelect').value = s.roundLimit === null ? 'null' : String(s.roundLimit);
+      $('#roundLimitSelect').onchange = (e) => {
+        const value = e.target.value;
+        send({ type: 'set-round-limit', roundLimit: value === 'null' ? null : Number(value) });
+      };
       const rbtn = $('#readyBtn');
       rbtn.disabled = s.readyNeeded < 2;
       rbtn.onclick = () => send({ type: 'ready' });
