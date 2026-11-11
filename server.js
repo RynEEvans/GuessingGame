@@ -473,6 +473,16 @@ wss.on('connection', (ws) => {
         const room = rooms.get(code);
         if (!name) return sendTo(ws, { type: 'error', message: 'Enter a name.' });
         if (!room) return sendTo(ws, { type: 'error', message: 'No room with that code.' });
+        const returningPlayer = room.players.find((p) =>
+          !isOnline(p) && p.name.toLowerCase() === name.toLowerCase());
+        if (returningPlayer) {
+          returningPlayer.ws = ws;
+          returningPlayer.spec = room.phase !== 'lobby';
+          pushLog(room, { type: 'system', text: `${returningPlayer.name} rejoined.` });
+          sendTo(ws, { type: 'joined', id: returningPlayer.id });
+          broadcast(room);
+          break;
+        }
         const asPlayer = room.phase === 'lobby';
         if (asPlayer && room.players.filter((p) => !p.spec).length >= 4) {
           return sendTo(ws, { type: 'error', message: 'Room is full (max 4 players).' });
@@ -766,16 +776,14 @@ wss.on('connection', (ws) => {
     const player = playerOf(room, ws);
     if (!player) return;
 
-    room.players = room.players.filter((p) => p !== player);
     delete room.ready[player.id];
-    if (room.players.length === 0) {
-      rooms.delete(room.code);
-      return;
+    if (player.id === room.hostId) {
+      const nextHost = room.players.find((p) => p !== player && isOnline(p));
+      if (nextHost) room.hostId = nextHost.id;
     }
-    if (player.id === room.hostId) room.hostId = room.players[0].id;
 
     const online = onlineInOrder(room);
-    pushLog(room, { type: 'system', text: `${player.name} left.` });
+    pushLog(room, { type: 'system', text: `${player.name} disconnected.` });
 
     if (room.phase === 'assigning' || room.phase === 'review' || room.phase === 'questioning') {
       if (online.length < 2) {

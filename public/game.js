@@ -60,6 +60,7 @@
   }
 
   function showError(text) {
+    createBtn.disabled = joinBtn.disabled = false;
     if (!roomView.hidden) {
       notice.textContent = text;
       notice.hidden = false;
