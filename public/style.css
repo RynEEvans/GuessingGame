@@ -109,11 +109,22 @@ button.guess { background: var(--accent2); color: #06351f; font-weight: 700; }
   border-radius: var(--radius);
 }
 .notes-panel label { display: block; margin-bottom: 8px; font-weight: 700; }
-.notes-panel textarea {
+.notes-toolbar { display: flex; gap: 6px; margin-bottom: 8px; }
+.notes-toolbar button {
+  min-width: 38px;
+  padding: 6px 10px;
+  border: var(--border);
+  border-radius: 8px;
+  background: var(--panel2);
+}
+#notesX { color: var(--danger); }
+#notesCheck { color: var(--accent2); }
+.notes-editor {
   width: 100%;
   height: clamp(180px, 48vh, 500px);
   min-height: 180px;
   resize: vertical;
+  overflow: auto;
   padding: 12px;
   border: var(--border);
   border-radius: var(--radius);
@@ -122,8 +133,11 @@ button.guess { background: var(--accent2); color: #06351f; font-weight: 700; }
   font: inherit;
   line-height: 1.5;
   outline: none;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
-.notes-panel textarea:focus { border-color: var(--accent); }
+.notes-editor:focus { border-color: var(--accent); }
+.notes-editor:empty::before { content: attr(data-placeholder); color: var(--muted); pointer-events: none; }
 .notes-panel .muted { margin: 8px 0 0; }
 
 .roombar {
@@ -341,7 +355,7 @@ button.guess { background: var(--accent2); color: #06351f; font-weight: 700; }
 @media (max-width: 900px) {
   .room-layout { grid-template-columns: minmax(0, 1fr); }
   .notes-panel { position: static; }
-  .notes-panel textarea { height: clamp(180px, 38vh, 320px); }
+  .notes-editor { height: clamp(180px, 38vh, 320px); }
   .roombar { align-items: flex-start; flex-wrap: wrap; }
 }
 

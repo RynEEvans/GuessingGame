@@ -10,7 +10,7 @@
 <body>
   <main>
     <header class="title">
-      <h1><span id="logoG" title="">G</span>uessing Game <span class="ver">1.2</span></h1>
+      <h1><span id="logoG" title="">G</span>uessing Game <span class="ver">1.2.1</span></h1>
       <p>One player picks a secret, the others ask yes/no questions to guess it.</p>
     </header>
 
@@ -87,8 +87,16 @@
           <ol id="log" class="log"></ol>
         </div>
         <aside class="notes-panel">
-          <label for="notesInput">Notepad</label>
-          <textarea id="notesInput" placeholder="Keep your clues and thoughts here…" spellcheck="true"></textarea>
+          <label id="notesLabel" for="notesInput">Notepad</label>
+          <div class="notes-toolbar" role="toolbar" aria-label="Notepad formatting">
+            <button type="button" id="notesBold" title="Bold selected text" aria-label="Bold"><strong>B</strong></button>
+            <button type="button" id="notesItalic" title="Italicize selected text" aria-label="Italic"><em>I</em></button>
+            <button type="button" id="notesUnderline" title="Underline selected text" aria-label="Underline"><u>U</u></button>
+            <button type="button" id="notesStrike" title="Strikethrough selected text" aria-label="Strikethrough"><s>S</s></button>
+            <button type="button" id="notesX" title="Insert an X" aria-label="Insert X">✕</button>
+            <button type="button" id="notesCheck" title="Insert a check mark" aria-label="Insert check mark">✓</button>
+          </div>
+          <div id="notesInput" class="notes-editor" contenteditable="true" role="textbox" aria-labelledby="notesLabel" aria-multiline="true" data-placeholder="Keep your clues and thoughts here…" spellcheck="true"></div>
           <p id="notesStatus" class="muted" aria-live="polite">Notes are saved in this browser for this room.</p>
         </aside>
       </div>

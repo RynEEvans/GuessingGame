@@ -233,6 +233,7 @@ function publicState(room, forId) {
     spectatorCardsVisible: !!room.spectatorCardsVisible,
     scoresToWin: SCORE_TO_WIN,
     turnId: room.turnId,
+    rotation: room.rotation,
     awaitingAnswer: !!room.poll,
     poll,
     submittedCount: onlineInOrder(room).filter((p) => p.id in room.submittedSecrets).length,
@@ -303,7 +304,7 @@ function solveAward(room) {
 }
 
 function advanceTurn(room) {
-  const order = onlineInOrder(room);
+  const order = roundOrder(room);
   if (order.length === 0) return;
   if (room.turnId == null) {
     room.turnId = order[0].id;
@@ -312,8 +313,10 @@ function advanceTurn(room) {
   const idx = order.findIndex((p) => p.id === room.turnId);
   const n = order.length;
   for (let k = 1; k <= n; k++) {
-    const next = order[(idx + k) % n];
+    const nextIdx = (idx + k + n) % n;
+    const next = order[nextIdx];
     if (!room.secrets[next.id]?.resolved) {
+      if (idx >= 0 && nextIdx <= idx) room.rotation += 1;
       room.turnId = next.id;
       return;
     }
@@ -365,6 +368,7 @@ function startAssignmentRound(room, msg) {
   const prevCategory = room.category;
   for (const p of room.players) p.spec = false;
   room.round += 1;
+  room.rotation = 1;
   room.category = pickCategory(prevCategory, room);
   room.submittedSecrets = {};
   room.pendingSecrets = {};
@@ -453,6 +457,7 @@ wss.on('connection', (ws) => {
           players: [player],
           phase: 'lobby',
           round: 0,
+          rotation: 0,
           log: [],
           winnerId: null,
           turnId: null,
@@ -715,6 +720,32 @@ wss.on('connection', (ws) => {
         room.category = category;
         pushLog(room, { type: 'system', text: `${player.name} set the category to ${category}.` });
         sendTo(ws, { type: 'dev-result', message: `Category set to ${category}.` });
+        broadcast(room);
+        break;
+      }
+
+      case 'dev-give-word': {
+        const room = findRoom(ws);
+        const player = room ? playerOf(room, ws) : null;
+        const name = String(msg.name || '').trim();
+        const word = String(msg.word || '').trim().slice(0, 60);
+        if (!player || !isLeader(room, player)) return sendTo(ws, { type: 'error', message: 'Only a room leader can use dev commands.' });
+        if (room.phase !== 'questioning') {
+          return sendTo(ws, { type: 'error', message: 'A spectator can only join as a player while a round is being played.' });
+        }
+        if (!name) return sendTo(ws, { type: 'error', message: 'Enter the spectator name.' });
+        if (!word) return sendTo(ws, { type: 'error', message: 'Enter a word to give the spectator.' });
+        const target = room.players.find((p) => p.name.toLowerCase() === name.toLowerCase());
+        if (!target) return sendTo(ws, { type: 'error', message: `No player named "${name}" is in this room.` });
+        if (!target.spec) return sendTo(ws, { type: 'error', message: `${target.name} is not a spectator.` });
+
+        const order = room.seatOrder ? [...room.seatOrder] : [...roundOrder(room)];
+        target.spec = false;
+        order.push(target);
+        room.seatOrder = order;
+        room.secrets[target.id] = { word, giverId: player.id, resolved: false };
+        pushLog(room, { type: 'system', text: `${player.name} brought ${target.name} into the game.` });
+        sendTo(ws, { type: 'dev-result', message: `${target.name} is now playing and has a word to guess.` });
         broadcast(room);
         break;
       }

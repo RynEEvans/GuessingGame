@@ -14,6 +14,12 @@
   const spectatorVisibilityControl = $('#spectatorVisibilityControl');
   const showSpectatorCards = $('#showSpectatorCards');
   const notesInput = $('#notesInput');
+  const notesBold = $('#notesBold');
+  const notesItalic = $('#notesItalic');
+  const notesUnderline = $('#notesUnderline');
+  const notesStrike = $('#notesStrike');
+  const notesX = $('#notesX');
+  const notesCheck = $('#notesCheck');
   const notesStatus = $('#notesStatus');
   const banner = $('#banner');
   const prompt = $('#prompt');
@@ -85,24 +91,97 @@
     if (notesRoomCode === code) return;
     notesRoomCode = code;
     try {
-      notesInput.value = localStorage.getItem(`guessing-game-notes-${code}`) || '';
+      const saved = localStorage.getItem(`guessing-game-notes-${code}`) || '';
+      if (saved.startsWith('gg-notes-html-v1:')) {
+        const parsed = new DOMParser().parseFromString(saved.slice('gg-notes-html-v1:'.length), 'text/html');
+        const allowedTags = new Set(['B', 'BR', 'DEL', 'DIV', 'EM', 'I', 'P', 'S', 'STRIKE', 'STRONG', 'U']);
+        const sanitize = (node) => {
+          if (node.nodeType === Node.TEXT_NODE) return document.createTextNode(node.textContent || '');
+          const children = [...node.childNodes].map(sanitize);
+          if (!allowedTags.has(node.nodeName)) {
+            const fragment = document.createDocumentFragment();
+            fragment.append(...children);
+            return fragment;
+          }
+          const element = document.createElement(node.nodeName.toLowerCase());
+          element.append(...children);
+          return element;
+        };
+        notesInput.replaceChildren(...[...parsed.body.childNodes].map(sanitize));
+      } else {
+        notesInput.textContent = saved;
+      }
       notesStatus.textContent = 'Notes are saved in this browser for this room.';
     } catch (err) {
-      notesInput.value = '';
+      notesInput.replaceChildren();
       notesStatus.textContent = 'Browser storage is unavailable; notes may not be saved.';
       console.error('Could not load saved notes:', err);
     }
   }
 
-  notesInput.addEventListener('input', () => {
+  function saveNotes() {
     if (!notesRoomCode) return;
     try {
-      localStorage.setItem(`guessing-game-notes-${notesRoomCode}`, notesInput.value);
+      localStorage.setItem(`guessing-game-notes-${notesRoomCode}`, `gg-notes-html-v1:${notesInput.innerHTML}`);
       notesStatus.textContent = 'Notes saved.';
     } catch (err) {
       notesStatus.textContent = 'Could not save notes. Check browser storage space or settings.';
       console.error('Could not save notes:', err);
     }
+  }
+
+  function insertNoteMark(mark) {
+    const selection = window.getSelection();
+    let range;
+    if (selection?.rangeCount && notesInput.contains(selection.anchorNode)) {
+      range = selection.getRangeAt(0);
+      if (!range.collapsed) range.collapse(false);
+      const container = range.startContainer.nodeType === Node.ELEMENT_NODE
+        ? range.startContainer
+        : range.startContainer.parentElement;
+      const struckText = container?.closest('s, strike, del');
+      if (struckText && notesInput.contains(struckText)) {
+        range.setStartAfter(struckText);
+        range.collapse(true);
+      }
+    } else {
+      range = document.createRange();
+      range.selectNodeContents(notesInput);
+      range.collapse(false);
+    }
+    const markNode = document.createTextNode(`${mark} `);
+    range.insertNode(markNode);
+    range.setStartAfter(markNode);
+    range.collapse(true);
+    notesInput.focus();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    saveNotes();
+  }
+
+  function formatNote(command) {
+    notesInput.focus();
+    document.execCommand(command);
+    saveNotes();
+  }
+
+  for (const [button, command] of [
+    [notesBold, 'bold'],
+    [notesItalic, 'italic'],
+    [notesUnderline, 'underline'],
+    [notesStrike, 'strikeThrough'],
+  ]) {
+    button.addEventListener('mousedown', (event) => event.preventDefault());
+    button.addEventListener('click', () => formatNote(command));
+  }
+
+  notesX.addEventListener('mousedown', (event) => event.preventDefault());
+  notesX.addEventListener('click', () => insertNoteMark('✕'));
+  notesCheck.addEventListener('mousedown', (event) => event.preventDefault());
+  notesCheck.addEventListener('click', () => insertNoteMark('✓'));
+
+  notesInput.addEventListener('input', () => {
+    saveNotes();
   });
 
   function connect() {
@@ -203,7 +282,7 @@
 
     codeBtn.textContent = s.code;
     devRoom.value = `${s.code} · ${s.phase} · round ${s.round}`;
-    roundChip.textContent = `Round ${s.round}`;
+    roundChip.textContent = `Round ${s.round} · Rotation ${s.rotation}`;
     roundChip.hidden = s.round < 1;
     chatChip.textContent = s.chat === 'voice' ? 'Voice' : 'Text';
     chatChip.hidden = false;
@@ -226,6 +305,7 @@
     for (const player of s.players) {
       suggestions.add(`/leader "${player.name}"`);
       suggestions.add(`/kick "${player.name}"`);
+      if (player.spec) suggestions.add(`/give_word "${player.name}" "`);
     }
     for (const category of [...(s.categories?.all || []), ...(s.categories?.custom || [])]) {
       suggestions.add(`/category "${category}"`);
@@ -626,6 +706,7 @@
           'Dev commands (leaders only):',
           '/leader "Player Name" — promote a player to host and grant dev commands',
           '/kick "Player Name" — remove a player from the room',
+          '/give_word "Spectator" "Word" — add a spectator to the active round with a word to guess',
           '/category "Category" — set the category before anyone submits a word',
           '/shuffle_players — shuffle player order during secret assignment',
           '/eye_open — show your own secret card',
@@ -646,6 +727,14 @@
           devError.textContent = 'Use /category "category name".';
         } else {
           send({ type: 'dev-category', name: match[1] });
+          devSend.value = '';
+        }
+      } else if (cmd === '/give_word') {
+        const match = raw.match(/^\/give_word\s+"([^"]+)"\s+"([^"]+)"\s*$/i);
+        if (!match) {
+          devError.textContent = 'Use /give_word "spectator name" "word" during the question round.';
+        } else {
+          send({ type: 'dev-give-word', name: match[1], word: match[2] });
           devSend.value = '';
         }
       } else if (cmd === '/eye_open') {
