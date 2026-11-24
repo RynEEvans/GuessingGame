@@ -318,13 +318,21 @@ button.guess { background: var(--accent2); color: #06351f; font-weight: 700; }
 .setrow { margin-top: 8px; }
 #settingsBtn { width: 100%; background: var(--panel); border: 1px solid #2b3648; }
 #settingsPanel {
+  width: 100%;
   margin-top: 10px;
   padding: 12px 14px;
   background: #121926;
   border: var(--border);
   border-radius: var(--radius);
 }
-.catlist { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+.catlist {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.category-actions { display: flex; gap: 8px; margin-bottom: 8px; }
+.category-actions button { padding: 6px 10px; font-size: 13px; }
 .catrow {
   display: flex;
   align-items: center;

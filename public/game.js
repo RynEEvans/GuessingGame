@@ -31,6 +31,12 @@
   const logEl = $('#log');
   const chatChip = $('#chatChip');
   const notice = $('#notice');
+  const voteSound = new Audio('/sounds/notifcation.mp3');
+  const incorrectGuessSound = new Audio('/sounds/buzzer-error.mp3');
+  const correctGuessSound = new Audio('/sounds/grunt-birthday-party.mp3');
+  voteSound.preload = 'auto';
+  incorrectGuessSound.preload = 'auto';
+  correctGuessSound.preload = 'auto';
 
   const devConsole = $('#devConsole');
   const devStatus = $('#devStatus');
@@ -55,6 +61,10 @@
   let notesRoomCode = null;
   let resumeToken = null;
   let autoRejoinPending = false;
+  let settingsOpen = false;
+  let pollWasOpen = false;
+  let previousLogLength = null;
+  let wasMyCardResolved = false;
   const playerSessionKey = 'guessing-game-player';
 
   function readSavedPlayer() {
@@ -313,9 +323,32 @@
     return s.players.find((p) => p.id === myId);
   }
 
+  function playSound(sound) {
+    sound.currentTime = 0;
+    sound.play().catch((err) => console.warn('Could not play game sound:', err));
+  }
+
   function render(s) {
     notice.hidden = true;
+    const pollOpen = Boolean(s.poll);
+    if (pollOpen && !pollWasOpen) {
+      playSound(voteSound);
+    }
+    pollWasOpen = pollOpen;
+
     const me = meOf(s);
+    if (previousLogLength !== null) {
+      const newEntries = s.log.slice(previousLogLength);
+      if (newEntries.some((entry) => entry.type === 'guess' && entry.who === myId)) {
+        playSound(incorrectGuessSound);
+      }
+      if (!wasMyCardResolved && me?.resolved) {
+        playSound(correctGuessSound);
+      }
+    }
+    previousLogLength = s.log.length;
+    wasMyCardResolved = !!me?.resolved;
+
     if (me) {
       joinView.hidden = true;
       roomView.hidden = false;
@@ -441,6 +474,8 @@
     controls.innerHTML = '';
     controls.hidden = false;
 
+    if (s.phase !== 'lobby') settingsOpen = false;
+
     if (me?.spec) {
       controls.innerHTML = `<div class="muted">Watching — you'll play from the next round.</div>`;
       return;
@@ -474,9 +509,13 @@
           ? `<div class="muted" style="margin-bottom:8px">${allReady ? 'Everyone ready — start the round when you are.' : 'Waiting for everyone to ready up.'}</div>`
           : `<div class="muted" style="margin-bottom:8px">${s.readyCount} of ${s.readyNeeded} ready — waiting for the host to start.</div>`}
         <div class="setrow"><button id="settingsBtn">⚙ Settings</button></div>
-        <div id="settingsPanel" hidden>
+        <div id="settingsPanel" ${settingsOpen ? '' : 'hidden'}>
           ${isHost ? '' : '<div class="muted" style="margin-bottom:6px">Only the host can change these.</div>'}
           <label class="devlabel" for="catList">Categories</label>
+          ${isHost && knownCats.length ? `<div class="category-actions">
+            <button type="button" id="selectAllCategories">Select all</button>
+            <button type="button" id="deselectAllCategories">Deselect all</button>
+          </div>` : ''}
           ${catRows ? `<div id="catList" class="catlist">${catRows}</div>` : '<div class="muted">No categories loaded.</div>'}
           <div class="setting">
             <label for="roundLimitSelect">Rounds per game</label>
@@ -505,7 +544,20 @@
       rbtn.onclick = () => send({ type: 'ready' });
       const sbtn = $('#startBtn');
       if (sbtn) sbtn.onclick = () => send({ type: 'start' });
-      $('#settingsBtn').onclick = () => { const p = $('#settingsPanel'); p.hidden = !p.hidden; };
+      $('#settingsBtn').onclick = () => {
+        settingsOpen = !settingsOpen;
+        $('#settingsPanel').hidden = !settingsOpen;
+      };
+      const setAllCategories = (checked) => {
+        const checkboxes = [...document.querySelectorAll('[data-cat]')];
+        for (const cb of checkboxes) cb.checked = checked;
+        const categories = checked ? checkboxes.map((cb) => cb.dataset.cat) : [];
+        send({ type: 'set-filter', categories });
+      };
+      const selectAllBtn = $('#selectAllCategories');
+      if (selectAllBtn) selectAllBtn.onclick = () => setAllCategories(true);
+      const deselectAllBtn = $('#deselectAllCategories');
+      if (deselectAllBtn) deselectAllBtn.onclick = () => setAllCategories(false);
       for (const cb of document.querySelectorAll('[data-cat]')) {
         cb.onchange = () => {
           const checked = [...document.querySelectorAll('[data-cat]:checked')].map((c) => c.dataset.cat);
@@ -540,7 +592,7 @@
       } else {
         const target = s.players.find((p) => p.id === s.myTargetId);
         let shuffleRow = '';
-        if (s.submittedCount + s.pendingCount === 0) {
+        if (s.submittedCount + s.pendingCount === 0 && (s.categories?.enabled?.length || 0) > 0) {
           shuffleRow = `<div class="row" style="margin-bottom:10px">
             <button type="button" id="shuffleBtn">Shuffle the theme</button>
           </div>`;

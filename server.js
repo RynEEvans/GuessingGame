@@ -15,6 +15,7 @@ const MIME = {
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
   '.ico': 'image/x-icon',
+  '.mp3': 'audio/mpeg',
 };
 
 let CATEGORIES = {};
@@ -26,9 +27,8 @@ try {
 
 function pickCategory(prev, room = null) {
   const known = { ...CATEGORIES, ...(room?.customCategories || {}) };
-  let names = room && room.enabledCategories && room.enabledCategories.length ? room.enabledCategories : Object.keys(known);
+  let names = room && Array.isArray(room.enabledCategories) ? room.enabledCategories : Object.keys(known);
   names = names.filter((n) => known[n]);
-  if (names.length === 0) names = Object.keys(known);
   if (names.length === 0) return null;
   if (prev && names.length > 1) {
     const others = names.filter((n) => n !== prev);
@@ -470,9 +470,13 @@ function distributeCards(room) {
 const httpServer = http.createServer(async (req, res) => {
   try {
     const pathname = decodeURIComponent((req.url || '/').split('?')[0]);
-    const rel = pathname === '/' ? 'index.html' : pathname.replace(/^\/+/, '');
-    const file = path.normalize(path.join(__dirname, 'public', rel));
-    if (!file.startsWith(path.join(__dirname, 'public') + path.sep)) {
+    const soundRequest = pathname.startsWith('/sounds/');
+    const root = path.join(__dirname, soundRequest ? 'sounds' : 'public');
+    const rel = soundRequest
+      ? pathname.slice('/sounds/'.length)
+      : pathname === '/' ? 'index.html' : pathname.replace(/^\/+/, '');
+    const file = path.normalize(path.join(root, rel));
+    if (!file.startsWith(root + path.sep)) {
       res.writeHead(403);
       res.end('Forbidden');
       return;
@@ -881,7 +885,7 @@ wss.on('connection', (ws) => {
         const wanted = Array.isArray(msg.categories)
           ? msg.categories.filter((c) => typeof c === 'string' && known[c])
           : [];
-        room.enabledCategories = wanted.length ? [...new Set(wanted)] : null;
+        room.enabledCategories = [...new Set(wanted)];
         broadcast(room);
         break;
       }
