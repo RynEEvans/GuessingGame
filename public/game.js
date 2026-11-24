@@ -15,6 +15,7 @@
   const leaveRoomBtn = $('#leaveRoomBtn');
   const playerList = $('#playerList');
   const roundChip = $('#roundChip');
+  const gameTimer = $('#gameTimer');
   const spectatorVisibilityControl = $('#spectatorVisibilityControl');
   const showSpectatorCards = $('#showSpectatorCards');
   const notesInput = $('#notesInput');
@@ -58,6 +59,7 @@
     const openedAt = Number(btn.dataset.openedAt || 0);
     if (openedAt && Date.now() - openedAt >= 10000) btn.disabled = false;
   }, 250);
+  setInterval(updateGameTimer, 1000);
 
   let ws = null;
   let myId = null;
@@ -66,6 +68,8 @@
   let resumeToken = null;
   let autoRejoinPending = false;
   let settingsOpen = false;
+  let gameStartedAt = null;
+  let gameEndedAt = null;
   let pollWasOpen = false;
   let previousLogLength = null;
   let wasMyCardResolved = false;
@@ -328,6 +332,24 @@
     return s.players.find((p) => p.id === myId);
   }
 
+  function formatElapsedTime(milliseconds) {
+    const totalSeconds = Math.floor(milliseconds / 1000);
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    return [hours, minutes, seconds].map((part) => String(part).padStart(2, '0')).join(':');
+  }
+
+  function updateGameTimer() {
+    if (!gameStartedAt) {
+      gameTimer.hidden = true;
+      return;
+    }
+    const endTime = gameEndedAt || Date.now();
+    gameTimer.textContent = `Game ${formatElapsedTime(Math.max(0, endTime - gameStartedAt))}`;
+    gameTimer.hidden = false;
+  }
+
   function readSoundVolume() {
     try {
       const saved = localStorage.getItem(soundVolumeStorageKey);
@@ -392,6 +414,10 @@
     pollWasOpen = pollOpen;
 
     const me = meOf(s);
+    gameStartedAt = s.gameStartedAt || null;
+    gameEndedAt = s.gameEndedAt || null;
+    updateGameTimer();
+
     if (previousLogLength !== null) {
       const newEntries = s.log.slice(previousLogLength);
       if (newEntries.some((entry) => entry.type === 'guess' && entry.who === myId)) {
@@ -524,6 +550,56 @@
     }
   }
 
+  function renderEndgameResults(s) {
+    const rankedPlayers = s.players
+      .filter((player) => !player.spec)
+      .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
+    let rank = 0;
+    let previousScore = null;
+    const standings = rankedPlayers.map((player, index) => {
+      if (index === 0 || player.score !== previousScore) rank = index + 1;
+      previousScore = player.score;
+      return `<li>
+        <span class="placement">${rank}.</span>
+        <span class="standings-name">${escapeHtml(player.name)}</span>
+        <strong>${player.score} point${player.score === 1 ? '' : 's'}</strong>
+      </li>`;
+    }).join('');
+
+    const accolades = [
+      { title: 'Longest turn', key: 'maxMs', format: formatElapsedTime },
+      { title: 'Most questions asked', key: 'questionPresses', format: (count) => `${count} question${count === 1 ? '' : 's'}` },
+      { title: 'Most guesses', key: 'guessPresses', format: (count) => `${count} guess${count === 1 ? '' : 'es'}` },
+    ].map(({ title, key, format }) => {
+      const values = rankedPlayers.map((player) => ({
+        player,
+        value: s.turnStats?.[player.id]?.[key] || 0,
+      }));
+      const highest = Math.max(0, ...values.map(({ value }) => value));
+      if (highest === 0) return '';
+      const winners = values
+        .filter(({ value }) => value === highest)
+        .map(({ player }) => escapeHtml(player.name))
+        .join(', ');
+      return `<div class="accolade">
+        <strong>${title}</strong>
+        <span>${winners}</span>
+        <span class="muted">${format(highest)}</span>
+      </div>`;
+    }).join('');
+
+    return `<div class="game-results">
+      <section>
+        <h2>Final standings</h2>
+        <ol class="standings">${standings}</ol>
+      </section>
+      <section>
+        <h2>Accolades</h2>
+        ${accolades ? `<div class="accolades">${accolades}</div>` : '<div class="muted">No accolades earned.</div>'}
+      </section>
+    </div>`;
+  }
+
   function renderControls(s, me) {
     const prevSecret = controls.querySelector('#secretInput')?.value || '';
     controls.innerHTML = '';
@@ -531,7 +607,7 @@
 
     if (s.phase !== 'lobby') settingsOpen = false;
 
-    if (me?.spec) {
+    if (me?.spec && s.phase !== 'over') {
       controls.innerHTML = `<div class="muted">Watching — you'll play from the next round.</div>`;
       return;
     }
@@ -757,6 +833,7 @@
           </div>
           <div class="muted" style="margin-top:8px">Pick one — it locks in how you play this turn.</div>`;
         $('#qBtn').onclick = () => {
+          send({ type: 'turn-choice', choice: 'question' });
           if (s.chat === 'voice') {
             controls.innerHTML = `
               <div class="muted">Ask your yes/no question out loud, then open the vote for the room.</div>
@@ -778,6 +855,7 @@
           $('#askInput').focus();
         };
         $('#gBtn').onclick = () => {
+          send({ type: 'turn-choice', choice: 'guess' });
           controls.innerHTML = `
             <form class="askForm">
               <input id="guessInput" type="text" maxlength="120" placeholder="Your secret word is…" autocomplete="off" />
@@ -804,7 +882,7 @@
     }
 
     if (s.phase === 'over') {
-      controls.innerHTML = `<button id="restartBtn" class="primary">Play again</button>`;
+      controls.innerHTML = `${renderEndgameResults(s)}<button id="restartBtn" class="primary">Play again</button>`;
       $('#restartBtn').onclick = () => send({ type: 'restart' });
       return;
     }

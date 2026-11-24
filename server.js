@@ -230,6 +230,9 @@ function publicState(room, forId) {
     closedToNewPlayers: room.closedToNewPlayers,
     log: room.log,
     winnerId: room.winnerId,
+    gameStartedAt: room.gameStartedAt,
+    gameEndedAt: room.gameEndedAt,
+    turnStats: room.turnStats,
     hostId: room.hostId,
     myIsLeader: viewer ? isLeader(room, viewer) : false,
     spectatorCardsVisible: !!room.spectatorCardsVisible,
@@ -306,6 +309,7 @@ function removePlayer(room, target, departureText, restartText) {
   delete room.submittedSecrets[target.id];
   delete room.pendingSecrets[target.id];
   delete room.secrets[target.id];
+  delete room.turnStats[target.id];
   room.reviews = room.reviews.filter((review) =>
     review.giverId !== target.id && review.targetId !== target.id);
   for (const review of room.reviews) delete review.votes[target.id];
@@ -340,6 +344,11 @@ function removePlayer(room, target, departureText, restartText) {
       room.poll = null;
       room.ready = {};
       room.log = [];
+      room.gameStartedAt = null;
+      room.gameEndedAt = null;
+      room.turnStartedAt = null;
+      room.turnActionRecorded = false;
+      room.turnStats = {};
       pushLog(room, { type: 'system', text: 'Not enough players. Waiting for more.' });
     } else {
       startAssignmentRound(room, restartText);
@@ -354,11 +363,48 @@ function solveAward(room) {
   return Math.max(0, n - 1 - done);
 }
 
+function beginTurn(room, playerId) {
+  room.turnId = playerId;
+  room.turnStartedAt = Date.now();
+  room.turnActionRecorded = false;
+}
+
+function turnStatsFor(room, playerId) {
+  if (!room.turnStats[playerId]) {
+    room.turnStats[playerId] = {
+      turns: 0,
+      totalMs: 0,
+      lastMs: 0,
+      maxMs: 0,
+      questionPresses: 0,
+      guessPresses: 0,
+    };
+  }
+  return room.turnStats[playerId];
+}
+
+function recordTurnDuration(room, playerId) {
+  if (room.turnId !== playerId || room.turnStartedAt == null || room.turnActionRecorded) return;
+  const durationMs = Math.max(0, Date.now() - room.turnStartedAt);
+  const stats = turnStatsFor(room, playerId);
+  stats.turns += 1;
+  stats.totalMs += durationMs;
+  stats.lastMs = durationMs;
+  stats.maxMs = Math.max(stats.maxMs, durationMs);
+  room.turnActionRecorded = true;
+}
+
 function advanceTurn(room) {
+  if (room.turnId != null) recordTurnDuration(room, room.turnId);
   const order = roundOrder(room);
-  if (order.length === 0) return;
+  if (order.length === 0) {
+    room.turnId = null;
+    room.turnStartedAt = null;
+    room.turnActionRecorded = false;
+    return;
+  }
   if (room.turnId == null) {
-    room.turnId = order[0].id;
+    beginTurn(room, order[0].id);
     return;
   }
   const idx = order.findIndex((p) => p.id === room.turnId);
@@ -368,11 +414,13 @@ function advanceTurn(room) {
     const next = order[nextIdx];
     if (!room.secrets[next.id]?.resolved) {
       if (idx >= 0 && nextIdx <= idx) room.rotation += 1;
-      room.turnId = next.id;
+      beginTurn(room, next.id);
       return;
     }
   }
   room.turnId = null;
+  room.turnStartedAt = null;
+  room.turnActionRecorded = false;
 }
 
 function resolvePlayer(room, receiver) {
@@ -388,6 +436,9 @@ function resolvePlayer(room, receiver) {
 }
 
 function endRound(room) {
+  room.turnId = null;
+  room.turnStartedAt = null;
+  room.turnActionRecorded = false;
   for (const p of onlineInOrder(room)) {
     const giver = room.players.find((g) => g.id === room.secrets[p.id].giverId);
     pushLog(room, {
@@ -401,6 +452,7 @@ function endRound(room) {
     const leaders = players.filter((p) => p.score === highScore);
     room.winnerId = leaders.length === 1 ? leaders[0].id : null;
     room.phase = 'over';
+    room.gameEndedAt = Date.now();
   } else {
     room.phase = 'reveal';
   }
@@ -431,6 +483,8 @@ function startAssignmentRound(room, msg) {
   room.log = [];
   room.winnerId = null;
   room.turnId = null;
+  room.turnStartedAt = null;
+  room.turnActionRecorded = false;
   const online = onlineInOrder(room);
   let order = shuffle([...online]);
   if (room.prevCycle && online.length > 2) {
@@ -463,7 +517,7 @@ function distributeCards(room) {
   room.reviews = [];
   room.phase = 'questioning';
   room.poll = null;
-  room.turnId = order[0].id;
+  beginTurn(room, order[0].id);
   pushLog(room, { type: 'system', text: `Words handed out — each of you is guessing the word someone gave you. ${order[0].name} asks first.` });
 }
 
@@ -531,6 +585,11 @@ wss.on('connection', (ws) => {
           enabledCategories: Array.isArray(msg.categories) ? msg.categories.filter((c) => typeof c === 'string') : null,
           poll: null,
           category: null,
+          gameStartedAt: null,
+          gameEndedAt: null,
+          turnStartedAt: null,
+          turnActionRecorded: false,
+          turnStats: {},
           submittedSecrets: {},
           pendingSecrets: {},
           secrets: {},
@@ -609,6 +668,9 @@ wss.on('connection', (ws) => {
         const online = onlineInOrder(room);
         if (online.length < 2) return sendTo(ws, { type: 'error', message: 'Need at least 2 players.' });
         if (!online.every((p) => p.id in room.ready)) return sendTo(ws, { type: 'error', message: 'Wait until everyone is ready.' });
+        room.gameStartedAt = Date.now();
+        room.gameEndedAt = null;
+        room.turnStats = {};
         startAssignmentRound(room);
         broadcast(room);
         break;
@@ -654,6 +716,22 @@ wss.on('connection', (ws) => {
         break;
       }
 
+      case 'turn-choice': {
+        const room = findRoom(ws);
+        if (!room) return;
+        const player = playerOf(room, ws);
+        if (!player) return;
+        if (room.phase !== 'questioning') return sendTo(ws, { type: 'error', message: 'Turn choices are only available during the question round.' });
+        if (player.spec) return sendTo(ws, { type: 'error', message: 'Spectators join in the next round.' });
+        if (player.id !== room.turnId) return sendTo(ws, { type: 'error', message: 'Not your turn.' });
+        if (msg.choice !== 'question' && msg.choice !== 'guess') {
+          return sendTo(ws, { type: 'error', message: 'Choose Question or Guess.' });
+        }
+        const stats = turnStatsFor(room, player.id);
+        stats[msg.choice === 'question' ? 'questionPresses' : 'guessPresses'] += 1;
+        break;
+      }
+
       case 'question': {
         const room = findRoom(ws);
         if (!room) return;
@@ -688,6 +766,7 @@ wss.on('connection', (ws) => {
         if (player.id !== room.turnId) return sendTo(ws, { type: 'error', message: 'Not your turn.' });
         const guess = String(msg.guess || '').trim().slice(0, 120);
         if (!guess) return sendTo(ws, { type: 'error', message: 'Enter a guess.' });
+        recordTurnDuration(room, player.id);
         if (isSolve(guess, my.word)) {
           resolvePlayer(room, player);
           const left = onlineInOrder(room).filter((p) => !room.secrets[p.id]?.resolved).length;
@@ -1005,6 +1084,9 @@ wss.on('connection', (ws) => {
         if (room.phase !== 'over') return;
         for (const p of room.players) p.score = 0;
         room.round = 0;
+        room.gameStartedAt = Date.now();
+        room.gameEndedAt = null;
+        room.turnStats = {};
         startAssignmentRound(room);
         broadcast(room);
         break;

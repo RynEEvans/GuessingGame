@@ -330,6 +330,38 @@ button.guess { background: var(--accent2); color: #06351f; font-weight: 700; }
 
 #controls { margin-bottom: 12px; }
 
+.game-results {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.game-results section {
+  min-width: 0;
+  padding: 14px;
+  background: var(--panel);
+  border: var(--border);
+  border-radius: var(--radius);
+}
+.game-results h2 { margin: 0 0 10px; font-size: 16px; }
+.standings { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.standings li {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--panel2);
+  border-radius: 8px;
+  font-size: 14px;
+}
+.placement { color: var(--muted); font-weight: 700; }
+.standings-name { overflow-wrap: anywhere; }
+.standings li strong { font-size: 13px; font-variant-numeric: tabular-nums; }
+.accolades { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 8px; }
+.accolade { display: flex; flex-direction: column; gap: 4px; padding: 10px; background: var(--panel2); border-radius: 8px; }
+.accolade .muted { min-height: auto; }
+
 .secretForm input {
   background: var(--panel2);
   text-transform: uppercase;
@@ -422,6 +454,7 @@ button.guess { background: var(--accent2); color: #06351f; font-weight: 700; }
   .row { gap: 8px; }
   button { padding: 10px 12px; }
   .players { justify-content: flex-start; }
+  .game-results { grid-template-columns: minmax(0, 1fr); }
 }
 
 #logoG { cursor: default; user-select: none; }
