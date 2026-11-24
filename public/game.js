@@ -370,6 +370,18 @@
     personalSettingsBtn.setAttribute('aria-expanded', String(open));
   });
   soundVolumeInput.addEventListener('input', () => setSoundVolume(soundVolumeInput.value));
+  document.addEventListener('keydown', (event) => {
+    if (event.repeat || event.altKey || event.ctrlKey || event.metaKey) return;
+    const yesButton = $('#yesBtn');
+    const noButton = $('#noBtn');
+    const button = event.key === 'ArrowLeft' ? yesButton : event.key === 'ArrowRight' ? noButton : null;
+    if (!button) return;
+    if (document.activeElement !== document.body
+      && document.activeElement !== yesButton
+      && document.activeElement !== noButton) return;
+    event.preventDefault();
+    button.click();
+  });
 
   function render(s) {
     notice.hidden = true;
@@ -726,9 +738,10 @@
             <div class="pollq">${escapeHtml(askerName)} asks:</div>
             <div class="polltext">“${escapeHtml(poll.question)}”</div>
             <div class="row" style="margin-top:10px">
-              <button class="good" id="yesBtn">Yes</button>
-              <button class="bad" id="noBtn">No</button>
+              <button class="good" id="yesBtn" aria-keyshortcuts="ArrowLeft">Yes</button>
+              <button class="bad" id="noBtn" aria-keyshortcuts="ArrowRight">No</button>
             </div>
+            <div class="muted" style="margin-top:6px">Keyboard: ← Yes · → No</div>
             <div class="muted" style="margin-top:8px">${poll.voters}/${poll.needed} voted</div>`;
           $('#yesBtn').onclick = () => send({ type: 'vote', yes: true });
           $('#noBtn').onclick = () => send({ type: 'vote', yes: false });
