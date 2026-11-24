@@ -31,6 +31,10 @@
   const logEl = $('#log');
   const chatChip = $('#chatChip');
   const notice = $('#notice');
+  const personalSettingsBtn = $('#personalSettingsBtn');
+  const personalSettingsPanel = $('#personalSettingsPanel');
+  const soundVolumeInput = $('#soundVolume');
+  const soundVolumeValue = $('#soundVolumeValue');
   const voteSound = new Audio('/sounds/notifcation.mp3');
   const incorrectGuessSound = new Audio('/sounds/buzzer-error.mp3');
   const correctGuessSound = new Audio('/sounds/grunt-birthday-party.mp3');
@@ -66,6 +70,7 @@
   let previousLogLength = null;
   let wasMyCardResolved = false;
   const playerSessionKey = 'guessing-game-player';
+  const soundVolumeStorageKey = 'guessing-game-sound-volume';
 
   function readSavedPlayer() {
     try {
@@ -323,10 +328,48 @@
     return s.players.find((p) => p.id === myId);
   }
 
+  function readSoundVolume() {
+    try {
+      const saved = localStorage.getItem(soundVolumeStorageKey);
+      if (saved === null) return 100;
+      const volume = Number(saved);
+      if (Number.isFinite(volume) && volume >= 0 && volume <= 100) return volume;
+      console.error('Saved sound volume is invalid; using 100%.');
+    } catch (err) {
+      console.error('Could not read sound volume:', err);
+    }
+    return 100;
+  }
+
+  function setSoundVolume(value, save = true) {
+    const volume = Number(value);
+    const normalizedVolume = volume / 100;
+    for (const sound of [voteSound, incorrectGuessSound, correctGuessSound]) {
+      sound.volume = normalizedVolume;
+    }
+    soundVolumeInput.value = String(volume);
+    soundVolumeValue.textContent = `${volume}%`;
+    if (save) {
+      try {
+        localStorage.setItem(soundVolumeStorageKey, String(volume));
+      } catch (err) {
+        console.error('Could not save sound volume:', err);
+      }
+    }
+  }
+
   function playSound(sound) {
     sound.currentTime = 0;
     sound.play().catch((err) => console.warn('Could not play game sound:', err));
   }
+
+  setSoundVolume(readSoundVolume(), false);
+  personalSettingsBtn.addEventListener('click', () => {
+    const open = personalSettingsPanel.hidden;
+    personalSettingsPanel.hidden = !open;
+    personalSettingsBtn.setAttribute('aria-expanded', String(open));
+  });
+  soundVolumeInput.addEventListener('input', () => setSoundVolume(soundVolumeInput.value));
 
   function render(s) {
     notice.hidden = true;

@@ -9,6 +9,15 @@
 </head>
 <body>
   <main>
+    <div class="page-toolbar">
+      <div class="personal-settings">
+        <button id="personalSettingsBtn" type="button" aria-expanded="false" aria-controls="personalSettingsPanel">⚙ Personal settings</button>
+        <div id="personalSettingsPanel" hidden>
+          <label for="soundVolume">Sound volume <output id="soundVolumeValue" for="soundVolume">100%</output></label>
+          <input id="soundVolume" type="range" min="0" max="100" step="1" value="100" />
+        </div>
+      </div>
+    </div>
     <header class="title">
       <h1><span id="logoG" title="">G</span>uessing Game <span class="ver">1.2.2</span></h1>
       <p>One player picks a secret, the others ask yes/no questions to guess it.</p>
