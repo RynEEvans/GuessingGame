@@ -568,6 +568,7 @@
 
     const accolades = [
       { title: 'Longest turn', key: 'maxMs', format: formatElapsedTime },
+      { title: 'Longest combined time', key: 'totalMs', format: formatElapsedTime },
       { title: 'Most questions asked', key: 'questionPresses', format: (count) => `${count} question${count === 1 ? '' : 's'}` },
       { title: 'Most guesses', key: 'guessPresses', format: (count) => `${count} guess${count === 1 ? '' : 'es'}` },
     ].map(({ title, key, format }) => {
